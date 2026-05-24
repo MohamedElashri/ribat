@@ -1,0 +1,6 @@
+plan*
+
+# Go build outputs
+/ribat
+coverage.out
+.gocache/
