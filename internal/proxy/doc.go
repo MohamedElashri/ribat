@@ -1,2 +1,2 @@
-// Package proxy will contain the optional registry proxy mode.
+// Package proxy implements the optional registry proxy mode.
 package proxy

@@ -11,16 +11,30 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/MohamedElashri/ribat/internal/audit"
 	"github.com/MohamedElashri/ribat/internal/quarantine"
+	"github.com/MohamedElashri/ribat/internal/store"
 )
 
 type DecisionEngine interface {
 	Decide(context.Context, quarantine.Request) (quarantine.Decision, error)
 }
 
+type DecisionRecorder interface {
+	RecordDecision(context.Context, store.DecisionRecord) error
+}
+
+type AuditRecorder interface {
+	Record(audit.Event) error
+}
+
 type Server struct {
-	Engine DecisionEngine
+	Engine    DecisionEngine
+	Decisions DecisionRecorder
+	Audit     AuditRecorder
+	Now       func() time.Time
 }
 
 type PluginRequest struct {
@@ -90,35 +104,44 @@ func (s Server) handleAuthZReq(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imageRef, ok, err := pullImageRef(req.RequestMethod, req.RequestURI)
+	action, err := inspectRequest(req.RequestMethod, req.RequestURI, req.RequestBody)
 	if err != nil {
 		writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: err.Error()})
 		return
 	}
-	if !ok {
+	if action.kind == actionPass {
 		writeJSON(w, http.StatusOK, PluginResponse{Allow: true})
 		return
 	}
-
-	decision, err := s.Engine.Decide(r.Context(), quarantine.Request{
-		ImageRef:      imageRef,
-		ClientUser:    req.User,
-		RequestMethod: req.RequestMethod,
-		RequestURI:    req.RequestURI,
-	})
-	if err != nil {
-		writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: "ribat authorization failed: " + err.Error()})
+	if action.kind == actionDeny {
+		if err := s.recordSyntheticDeny(r.Context(), req, action.reason); err != nil {
+			writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: "ribat authorization failed: " + err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: action.reason})
 		return
 	}
-	response := PluginResponse{
-		Allow: decision.Allowed,
-		Msg:   decisionMessage(decision),
+
+	var messages []string
+	for _, imageRef := range action.imageRefs {
+		decision, err := s.Engine.Decide(r.Context(), quarantine.Request{
+			ImageRef:      imageRef,
+			ClientUser:    req.User,
+			RequestMethod: req.RequestMethod,
+			RequestURI:    req.RequestURI,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: "ribat authorization failed: " + err.Error()})
+			return
+		}
+		message := decisionMessage(decision)
+		if !decision.Allowed {
+			writeJSON(w, http.StatusOK, PluginResponse{Allow: false, Err: message})
+			return
+		}
+		messages = append(messages, message)
 	}
-	if !decision.Allowed {
-		response.Err = response.Msg
-		response.Msg = ""
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, PluginResponse{Allow: true, Msg: strings.Join(messages, "\n\n")})
 }
 
 func (s Server) handleAuthZRes(w http.ResponseWriter, _ *http.Request) {
@@ -126,29 +149,181 @@ func (s Server) handleAuthZRes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func pullImageRef(method, requestURI string) (string, bool, error) {
-	if !strings.EqualFold(method, http.MethodPost) {
+	action, err := inspectRequest(method, requestURI, "")
+	if err != nil {
+		return "", false, err
+	}
+	if action.kind != actionDecide || len(action.imageRefs) == 0 {
 		return "", false, nil
+	}
+	return action.imageRefs[0], true, nil
+}
+
+type requestActionKind int
+
+const (
+	actionPass requestActionKind = iota
+	actionDecide
+	actionDeny
+)
+
+type requestAction struct {
+	kind      requestActionKind
+	imageRefs []string
+	reason    string
+}
+
+func inspectRequest(method, requestURI, requestBody string) (requestAction, error) {
+	if !strings.EqualFold(method, http.MethodPost) {
+		return requestAction{kind: actionPass}, nil
 	}
 	u, err := url.ParseRequestURI(requestURI)
 	if err != nil {
-		return "", false, fmt.Errorf("could not parse Docker request URI %q: %w", requestURI, err)
-	}
-	if !isImagesCreatePath(u.Path) {
-		return "", false, nil
+		return requestAction{}, fmt.Errorf("could not parse Docker request URI %q: %w", requestURI, err)
 	}
 
-	q := u.Query()
-	fromImage := q.Get("fromImage")
-	if fromImage == "" {
-		return "", true, fmt.Errorf("Docker pull request %q is missing fromImage", requestURI)
+	switch {
+	case isImagesCreatePath(u.Path):
+		q := u.Query()
+		fromImage := q.Get("fromImage")
+		if fromImage == "" {
+			return requestAction{kind: actionDeny}, fmt.Errorf("Docker pull request %q is missing fromImage", requestURI)
+		}
+		return requestAction{kind: actionDecide, imageRefs: []string{combineImageAndTag(fromImage, q.Get("tag"))}}, nil
+	case isBuildPath(u.Path):
+		if queryBool(u.Query().Get("pull")) {
+			return requestAction{
+				kind:   actionDeny,
+				reason: "docker build --pull is denied by Ribat because Dockerfile base images cannot be verified from this authorization request; use digest-pinned base images and build without --pull or pre-approve the pull separately",
+			}, nil
+		}
+		return requestAction{kind: actionPass}, nil
+	case isContainersCreatePath(u.Path):
+		imageRef, err := containerCreateImage(requestBody)
+		if err != nil {
+			return requestAction{}, err
+		}
+		return requestAction{kind: actionDecide, imageRefs: []string{imageRef}}, nil
+	case isServicesCreatePath(u.Path) || isServicesUpdatePath(u.Path):
+		imageRef, err := serviceImage(requestBody)
+		if err != nil {
+			return requestAction{}, err
+		}
+		return requestAction{kind: actionDecide, imageRefs: []string{imageRef}}, nil
+	default:
+		return requestAction{kind: actionPass}, nil
 	}
-	tag := q.Get("tag")
-	return combineImageAndTag(fromImage, tag), true, nil
+}
+
+func (s Server) recordSyntheticDeny(ctx context.Context, req PluginRequest, reason string) error {
+	now := s.now()
+	if s.Decisions != nil {
+		if err := s.Decisions.RecordDecision(ctx, store.DecisionRecord{
+			Timestamp:     now,
+			ImageRef:      "docker build",
+			Decision:      store.DecisionDeny,
+			Reason:        reason,
+			ClientUser:    req.User,
+			RequestMethod: req.RequestMethod,
+			RequestURI:    req.RequestURI,
+		}); err != nil {
+			return err
+		}
+	}
+	if s.Audit != nil {
+		return s.Audit.Record(audit.Event{
+			Timestamp:     now,
+			ImageRef:      "docker build",
+			Decision:      store.DecisionDeny,
+			Reason:        reason,
+			ClientUser:    req.User,
+			RequestMethod: req.RequestMethod,
+			RequestURI:    req.RequestURI,
+		})
+	}
+	return nil
+}
+
+func (s Server) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func isImagesCreatePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 3 && strings.HasPrefix(parts[0], "v") && parts[1] == "images" && parts[2] == "create"
+}
+
+func isBuildPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 2 && strings.HasPrefix(parts[0], "v") && parts[1] == "build"
+}
+
+func isContainersCreatePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && strings.HasPrefix(parts[0], "v") && parts[1] == "containers" && parts[2] == "create"
+}
+
+func isServicesCreatePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && strings.HasPrefix(parts[0], "v") && parts[1] == "services" && parts[2] == "create"
+}
+
+func isServicesUpdatePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 4 && strings.HasPrefix(parts[0], "v") && parts[1] == "services" && parts[2] != "" && parts[3] == "update"
+}
+
+func queryBool(value string) bool {
+	switch strings.ToLower(value) {
+	case "1", "true", "t", "yes", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func containerCreateImage(body string) (string, error) {
+	var req struct {
+		Image string `json:"Image"`
+	}
+	if err := decodeRequestBody(body, &req, "container create"); err != nil {
+		return "", err
+	}
+	if req.Image == "" {
+		return "", errors.New("Docker container create request is missing Image")
+	}
+	return req.Image, nil
+}
+
+func serviceImage(body string) (string, error) {
+	var req struct {
+		TaskTemplate struct {
+			ContainerSpec struct {
+				Image string `json:"Image"`
+			} `json:"ContainerSpec"`
+		} `json:"TaskTemplate"`
+	}
+	if err := decodeRequestBody(body, &req, "service create/update"); err != nil {
+		return "", err
+	}
+	imageRef := req.TaskTemplate.ContainerSpec.Image
+	if imageRef == "" {
+		return "", errors.New("Docker service create/update request is missing TaskTemplate.ContainerSpec.Image")
+	}
+	return imageRef, nil
+}
+
+func decodeRequestBody(body string, dst any, operation string) error {
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("Docker %s request is missing a request body", operation)
+	}
+	if err := json.Unmarshal([]byte(body), dst); err != nil {
+		return fmt.Errorf("could not parse Docker %s request body: %w", operation, err)
+	}
+	return nil
 }
 
 func combineImageAndTag(fromImage, tag string) string {

@@ -36,6 +36,26 @@ type ManifestDigest struct {
 	MediaType  string
 }
 
+type Manifest struct {
+	Registry   string
+	Repository string
+	Reference  string
+	Digest     string
+	MediaType  string
+	Body       []byte
+}
+
+type Blob struct {
+	Registry   string
+	Repository string
+	Digest     string
+	MediaType  string
+	Size       int64
+	Body       io.ReadCloser
+	StatusCode int
+	Header     http.Header
+}
+
 func NewResolver(client *http.Client) *Resolver {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -112,6 +132,79 @@ func (r *Resolver) Resolve(ctx context.Context, ref image.Reference) (ManifestDi
 	}, nil
 }
 
+func (r *Resolver) FetchManifest(ctx context.Context, ref image.Reference, reference string) (Manifest, error) {
+	if reference == "" {
+		return Manifest{}, fmt.Errorf("manifest reference is required for %s/%s", ref.Registry, ref.Repository)
+	}
+	endpoint, err := r.endpoint(ref.Registry)
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifestURL := endpoint + "/v2/" + ref.Repository + "/manifests/" + url.PathEscape(reference)
+	resp, err := r.doRegistryRequestWithAuth(ctx, http.MethodGet, manifestURL, strings.Join([]string{
+		MediaTypeOCIImageIndex,
+		MediaTypeDockerManifestList,
+		MediaTypeOCIManifest,
+		MediaTypeDockerManifestV2,
+	}, ", "))
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer closeBody(resp)
+	if resp.StatusCode == http.StatusNotFound {
+		return Manifest{}, fmt.Errorf("%w: %s/%s@%s", ErrTagNotFound, ref.Registry, ref.Repository, reference)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return Manifest{}, fmt.Errorf("fetch manifest for %s/%s@%s: registry returned HTTP %d", ref.Registry, ref.Repository, reference, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("read manifest for %s/%s@%s: %w", ref.Registry, ref.Repository, reference, err)
+	}
+	return Manifest{
+		Registry:   ref.Registry,
+		Repository: ref.Repository,
+		Reference:  reference,
+		Digest:     resp.Header.Get("Docker-Content-Digest"),
+		MediaType:  mediaType(resp.Header.Get("Content-Type")),
+		Body:       body,
+	}, nil
+}
+
+func (r *Resolver) FetchBlob(ctx context.Context, registryName, repository, digest string) (Blob, error) {
+	if digest == "" {
+		return Blob{}, errors.New("blob digest is required")
+	}
+	endpoint, err := r.endpoint(registryName)
+	if err != nil {
+		return Blob{}, err
+	}
+	blobURL := endpoint + "/v2/" + repository + "/blobs/" + url.PathEscape(digest)
+	resp, err := r.doRegistryRequestWithAuth(ctx, http.MethodGet, blobURL, "")
+	if err != nil {
+		return Blob{}, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		closeBody(resp)
+		return Blob{}, fmt.Errorf("blob not found: %s/%s@%s", registryName, repository, digest)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		status := resp.StatusCode
+		closeBody(resp)
+		return Blob{}, fmt.Errorf("fetch blob for %s/%s@%s: registry returned HTTP %d", registryName, repository, digest, status)
+	}
+	return Blob{
+		Registry:   registryName,
+		Repository: repository,
+		Digest:     digest,
+		MediaType:  mediaType(resp.Header.Get("Content-Type")),
+		Size:       resp.ContentLength,
+		Body:       resp.Body,
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header.Clone(),
+	}, nil
+}
+
 func (r *Resolver) endpoint(registry string) (string, error) {
 	if r != nil && r.Endpoints != nil {
 		if endpoint := r.Endpoints[registry]; endpoint != "" {
@@ -150,6 +243,46 @@ func (r *Resolver) doManifestRequest(ctx context.Context, method, manifestURL, t
 	resp, err := r.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("resolve registry digest: %w", err)
+	}
+	return resp, nil
+}
+
+func (r *Resolver) doRegistryRequestWithAuth(ctx context.Context, method, requestURL, accept string) (*http.Response, error) {
+	resp, err := r.doRegistryRequest(ctx, method, requestURL, accept, "")
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+
+	challenge, err := parseBearerChallenge(resp.Header.Get("WWW-Authenticate"))
+	if err != nil {
+		closeBody(resp)
+		return nil, fmt.Errorf("registry requires authentication but did not return a usable bearer challenge: %w", err)
+	}
+	closeBody(resp)
+	token, err := r.fetchBearerToken(ctx, challenge)
+	if err != nil {
+		return nil, err
+	}
+	return r.doRegistryRequest(ctx, method, requestURL, accept, token)
+}
+
+func (r *Resolver) doRegistryRequest(ctx context.Context, method, requestURL, accept, token string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create registry request: %w", err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := r.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("registry request: %w", err)
 	}
 	return resp, nil
 }

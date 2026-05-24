@@ -185,6 +185,132 @@ func TestAuthZReqAllowsDigestPinnedPull(t *testing.T) {
 	}
 }
 
+func TestAuthZReqDeniesContainerCreateMutableImage(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	engine, db, _ := newAuthZEngine(t, now, "sha256:container")
+	handler := Server{Engine: &engine}.Handler()
+
+	resp := postAuthZReq(t, handler, PluginRequest{
+		User:          "watchtower",
+		RequestMethod: http.MethodPost,
+		RequestURI:    "/v1.46/containers/create?name=app",
+		RequestBody:   `{"Image":"alpine:latest"}`,
+	})
+
+	if resp.Allow {
+		t.Fatalf("Allow = true, want container create denial: %#v", resp)
+	}
+	for _, want := range []string{
+		"Pull blocked by Ribat.",
+		"Image: docker.io/library/alpine:latest",
+		"Resolved digest: sha256:container",
+	} {
+		if !strings.Contains(resp.Err, want) {
+			t.Fatalf("Err = %q, want %q", resp.Err, want)
+		}
+	}
+	obs, err := db.GetObservation(context.Background(), "docker.io", "library/alpine", "latest", "sha256:container")
+	if err != nil {
+		t.Fatalf("GetObservation() error = %v", err)
+	}
+	if obs == nil {
+		t.Fatal("observation = nil, want container create image recorded")
+	}
+}
+
+func TestAuthZReqDeniesSwarmServiceUpdateMutableImage(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	engine, db, _ := newAuthZEngine(t, now, "sha256:service")
+	handler := Server{Engine: &engine}.Handler()
+
+	resp := postAuthZReq(t, handler, PluginRequest{
+		User:          "portainer",
+		RequestMethod: http.MethodPost,
+		RequestURI:    "/v1.46/services/web/update?version=7",
+		RequestBody:   `{"TaskTemplate":{"ContainerSpec":{"Image":"nginx:stable"}}}`,
+	})
+
+	if resp.Allow {
+		t.Fatalf("Allow = true, want service update denial: %#v", resp)
+	}
+	if !strings.Contains(resp.Err, "Image: docker.io/library/nginx:stable") {
+		t.Fatalf("Err = %q, want normalized service image", resp.Err)
+	}
+	obs, err := db.GetObservation(context.Background(), "docker.io", "library/nginx", "stable", "sha256:service")
+	if err != nil {
+		t.Fatalf("GetObservation() error = %v", err)
+	}
+	if obs == nil {
+		t.Fatal("observation = nil, want service update image recorded")
+	}
+}
+
+func TestAuthZReqDeniesBuildPullAndAudits(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	db, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	handler := Server{
+		Engine:    fakeEngine{},
+		Decisions: db,
+		Audit:     audit.NewLogger(auditPath),
+		Now:       func() time.Time { return now },
+	}.Handler()
+
+	resp := postAuthZReq(t, handler, PluginRequest{
+		User:          "builder",
+		RequestMethod: http.MethodPost,
+		RequestURI:    "/v1.46/build?pull=1&t=example/app",
+	})
+
+	if resp.Allow {
+		t.Fatalf("Allow = true, want build --pull denial: %#v", resp)
+	}
+	if !strings.Contains(resp.Err, "docker build --pull is denied by Ribat") {
+		t.Fatalf("Err = %q, want build pull denial reason", resp.Err)
+	}
+	count, err := db.CountDecisions(context.Background())
+	if err != nil {
+		t.Fatalf("CountDecisions() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("decision count = %d, want 1", count)
+	}
+	auditBody, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	for _, want := range []string{
+		`"image_ref":"docker build"`,
+		`"client_user":"builder"`,
+		`"request_uri":"/v1.46/build?pull=1\u0026t=example/app"`,
+		`"decision":"deny"`,
+	} {
+		if !bytes.Contains(auditBody, []byte(want)) {
+			t.Fatalf("audit log = %s, want %s", auditBody, want)
+		}
+	}
+}
+
+func TestAuthZReqAllowsBuildWithoutPull(t *testing.T) {
+	handler := Server{Engine: fakeEngine{}}.Handler()
+	resp := postAuthZReq(t, handler, PluginRequest{
+		RequestMethod: http.MethodPost,
+		RequestURI:    "/v1.46/build?t=example/app",
+	})
+
+	if !resp.Allow {
+		t.Fatalf("Allow = false, want build without --pull pass-through: %#v", resp)
+	}
+}
+
 func TestPullImageRef(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -217,7 +343,7 @@ func TestPullImageRef(t *testing.T) {
 		{
 			name:       "uncovered endpoint",
 			method:     http.MethodPost,
-			requestURI: "/v1.46/containers/create",
+			requestURI: "/v1.46/containers/json",
 			wantOK:     false,
 		},
 	}
@@ -233,6 +359,81 @@ func TestPullImageRef(t *testing.T) {
 			}
 			if gotRef != tt.wantRef {
 				t.Fatalf("ref = %q, want %q", gotRef, tt.wantRef)
+			}
+		})
+	}
+}
+
+func TestInspectRequestExtractsWorkflowImages(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		requestURI  string
+		requestBody string
+		wantKind    requestActionKind
+		wantRef     string
+	}{
+		{
+			name:       "compose pull images create",
+			method:     http.MethodPost,
+			requestURI: "/v1.46/images/create?fromImage=alpine&tag=latest",
+			wantKind:   actionDecide,
+			wantRef:    "alpine:latest",
+		},
+		{
+			name:        "watchtower container create",
+			method:      http.MethodPost,
+			requestURI:  "/v1.46/containers/create",
+			requestBody: `{"Image":"nginx:stable"}`,
+			wantKind:    actionDecide,
+			wantRef:     "nginx:stable",
+		},
+		{
+			name:        "portainer service create",
+			method:      http.MethodPost,
+			requestURI:  "/v1.46/services/create",
+			requestBody: `{"TaskTemplate":{"ContainerSpec":{"Image":"ghcr.io/example/app:main"}}}`,
+			wantKind:    actionDecide,
+			wantRef:     "ghcr.io/example/app:main",
+		},
+		{
+			name:        "swarm service update",
+			method:      http.MethodPost,
+			requestURI:  "/v1.46/services/example/update?version=3",
+			requestBody: `{"TaskTemplate":{"ContainerSpec":{"Image":"redis:7"}}}`,
+			wantKind:    actionDecide,
+			wantRef:     "redis:7",
+		},
+		{
+			name:       "build pull",
+			method:     http.MethodPost,
+			requestURI: "/v1.46/build?pull=true",
+			wantKind:   actionDeny,
+		},
+		{
+			name:       "build without pull",
+			method:     http.MethodPost,
+			requestURI: "/v1.46/build",
+			wantKind:   actionPass,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action, err := inspectRequest(tt.method, tt.requestURI, tt.requestBody)
+			if err != nil {
+				t.Fatalf("inspectRequest() error = %v", err)
+			}
+			if action.kind != tt.wantKind {
+				t.Fatalf("kind = %v, want %v", action.kind, tt.wantKind)
+			}
+			if tt.wantRef != "" {
+				if len(action.imageRefs) != 1 {
+					t.Fatalf("image refs = %#v, want one ref", action.imageRefs)
+				}
+				if action.imageRefs[0] != tt.wantRef {
+					t.Fatalf("image ref = %q, want %q", action.imageRefs[0], tt.wantRef)
+				}
 			}
 		})
 	}

@@ -260,6 +260,24 @@ func TestRunAuthzRequiresSocket(t *testing.T) {
 	}
 }
 
+func TestRunProxyRequiresListenAddress(t *testing.T) {
+	configPath := writeTestPolicyWithState(t, filepath.Join(t.TempDir(), "state.db"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"proxy", "--config", configPath}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("run(proxy without listen) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "proxy requires --listen ADDRESS") {
+		t.Fatalf("stderr = %q, want listen requirement", stderr.String())
+	}
+}
+
 func TestRunApproveBypassFreezeCommands(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.db")
 	configPath := writeTestPolicyWithState(t, statePath)

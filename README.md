@@ -2,7 +2,7 @@
 
 Ribat is a Docker image update gate for mutable tags such as `latest`, `stable`, and rolling release tags. It is designed to observe the digest a tag resolves to, keep new digests in quarantine for a configured age, and only allow pulls after the policy is satisfied.
 
-The current implementation includes a Go command-line application, local quarantine state, registry digest resolution, Docker authorization plugin mode, operations commands, a subprocess-based Cosign verification backend, and systemd installation artifacts. Later phases will add proxy mode.
+The current implementation includes a Go command-line application, local quarantine state, registry digest resolution, Docker authorization plugin mode with common updater workflow hardening, registry proxy mode, operations commands, a subprocess-based Cosign verification backend, and systemd installation artifacts.
 
 ## Usage
 ```bash
@@ -14,8 +14,13 @@ go run ./cmd/ribat bypass --config /path/to/ribat.yaml docker.io/library/alpine:
 go run ./cmd/ribat freeze --config /path/to/ribat.yaml docker.io/library/alpine:latest --reason "upstream compromise suspected"
 go run ./cmd/ribat audit --config /path/to/ribat.yaml --image docker.io/library/alpine:latest --since 7d
 go run ./cmd/ribat authz --config /path/to/ribat.yaml --socket /run/docker/plugins/ribat.sock
+go run ./cmd/ribat proxy --config /path/to/ribat.yaml --listen 127.0.0.1:5000
 go test ./...
 ```
+
+Proxy mode exposes a local Registry HTTP API gate. Pull through it by placing the upstream registry in the proxied repository path, for example `127.0.0.1:5000/docker.io/library/alpine:latest` or `127.0.0.1:5000/ghcr.io/example/app:main`.
+
+AuthZ mode checks Docker pull, container create, service create, and service update requests. It denies `docker build --pull` conservatively because the current authorization request does not provide enough trusted Dockerfile base-image context for Ribat to prove that all bases are safe.
 
 ## Configuration
 

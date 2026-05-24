@@ -14,6 +14,7 @@ import (
 	"github.com/MohamedElashri/ribat/internal/authz"
 	"github.com/MohamedElashri/ribat/internal/image"
 	"github.com/MohamedElashri/ribat/internal/policy"
+	"github.com/MohamedElashri/ribat/internal/proxy"
 	"github.com/MohamedElashri/ribat/internal/quarantine"
 	"github.com/MohamedElashri/ribat/internal/registry"
 	"github.com/MohamedElashri/ribat/internal/store"
@@ -27,6 +28,7 @@ Usage:
   ribat inspect IMAGE
   ribat decide [--config PATH] IMAGE
   ribat authz [--config PATH] --socket PATH
+  ribat proxy [--config PATH] --listen ADDRESS
   ribat approve [--config PATH] IMAGE:TAG@DIGEST --ttl DURATION --reason TEXT
   ribat bypass [--config PATH] IMAGE:TAG --ttl DURATION --reason TEXT
   ribat freeze [--config PATH] IMAGE:TAG --reason TEXT
@@ -58,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runDecide(args[1:], stdout, stderr)
 	case "authz":
 		return runAuthz(args[1:], stdout, stderr)
+	case "proxy":
+		return runProxy(args[1:], stdout, stderr)
 	case "approve":
 		return runApprove(args[1:], stdout, stderr)
 	case "bypass":
@@ -81,6 +85,81 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runProxy(args []string, stdout, stderr io.Writer) int {
+	configPath := defaultConfigPath()
+	var listenAddr string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--config":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "missing value for --config")
+				return 2
+			}
+			configPath = args[i+1]
+			i++
+		case "--listen":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "missing value for --listen")
+				return 2
+			}
+			listenAddr = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(arg, "--config=") {
+				configPath = strings.TrimPrefix(arg, "--config=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--listen=") {
+				listenAddr = strings.TrimPrefix(arg, "--listen=")
+				continue
+			}
+			fmt.Fprintf(stderr, "unknown argument %q for proxy\n", arg)
+			return 2
+		}
+	}
+	if listenAddr == "" {
+		fmt.Fprintln(stderr, "proxy requires --listen ADDRESS")
+		return 2
+	}
+
+	cfg, err := policy.LoadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not load policy: %v\n", err)
+		return 1
+	}
+	if cfg.State.Backend != "sqlite" {
+		fmt.Fprintf(stderr, "unsupported state backend %q; only sqlite is supported\n", cfg.State.Backend)
+		return 1
+	}
+	if cfg.State.Path == "" {
+		fmt.Fprintln(stderr, "state.path is required for proxy")
+		return 1
+	}
+
+	db, err := store.OpenSQLite(cfg.State.Path)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not open local state: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	resolver := registry.NewResolver(nil)
+	engine := quarantine.Engine{
+		Config:   cfg,
+		Store:    db,
+		Resolver: resolver,
+		Audit:    audit.NewLogger(cfg.Audit.Path),
+	}
+	fmt.Fprintf(stdout, "ribat proxy listening on %s\n", listenAddr)
+	if err := proxy.ListenAndServe(context.Background(), listenAddr, proxy.Server{Engine: &engine, Resolver: resolver}); err != nil {
+		fmt.Fprintf(stderr, "proxy server failed: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runAuthz(args []string, stdout, stderr io.Writer) int {
@@ -143,14 +222,15 @@ func runAuthz(args []string, stdout, stderr io.Writer) int {
 	}
 	defer db.Close()
 
+	logger := audit.NewLogger(cfg.Audit.Path)
 	engine := quarantine.Engine{
 		Config:   cfg,
 		Store:    db,
 		Resolver: registry.NewResolver(nil),
-		Audit:    audit.NewLogger(cfg.Audit.Path),
+		Audit:    logger,
 	}
 	fmt.Fprintf(stdout, "ribat authz listening on %s\n", socketPath)
-	if err := authz.ListenAndServe(context.Background(), socketPath, authz.Server{Engine: &engine}); err != nil {
+	if err := authz.ListenAndServe(context.Background(), socketPath, authz.Server{Engine: &engine, Decisions: db, Audit: logger}); err != nil {
 		fmt.Fprintf(stderr, "authz server failed: %v\n", err)
 		return 1
 	}
