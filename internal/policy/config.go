@@ -46,7 +46,12 @@ type SignaturesPolicy struct {
 }
 
 type CosignPolicy struct {
-	Required bool
+	Required      bool
+	Mode          string
+	Key           string
+	Issuer        string
+	Identity      string
+	IdentityRegex string
 }
 
 type Rule struct {
@@ -66,7 +71,12 @@ type RuleSignaturesPolicy struct {
 }
 
 type RuleCosignPolicy struct {
-	Required *bool
+	Required      *bool
+	Mode          *string
+	Key           *string
+	Issuer        *string
+	Identity      *string
+	IdentityRegex *string
 }
 
 type AuditConfig struct {
@@ -133,8 +143,61 @@ func (c Config) validate() error {
 				return err
 			}
 		}
+		if err := validateCosignPolicy(fmt.Sprintf("rules[%d].signatures.cosign", i), rule.Signatures.Cosign.effective(c.DefaultPolicy.Signatures.Cosign)); err != nil {
+			return err
+		}
+	}
+	if err := validateCosignPolicy("default_policy.signatures.cosign", c.DefaultPolicy.Signatures.Cosign); err != nil {
+		return err
 	}
 	return nil
+}
+
+func validateCosignPolicy(path string, p CosignPolicy) error {
+	if p.Mode != "" && p.Mode != "keyless" && p.Mode != "key" {
+		return fmt.Errorf("%s.mode has unsupported value %q; allowed values: keyless, key", path, p.Mode)
+	}
+	if !p.Required {
+		return nil
+	}
+	mode := p.Mode
+	if mode == "" && p.Key != "" {
+		mode = "key"
+	}
+	if mode == "key" && p.Key == "" {
+		return fmt.Errorf("%s.key is required when mode is key", path)
+	}
+	if mode == "keyless" || mode == "" {
+		if p.Identity == "" && p.IdentityRegex == "" {
+			return fmt.Errorf("%s.identity or %s.identity_regex is required for keyless verification", path, path)
+		}
+		if p.Identity != "" && p.IdentityRegex != "" {
+			return fmt.Errorf("%s.identity and %s.identity_regex are mutually exclusive", path, path)
+		}
+	}
+	return nil
+}
+
+func (p RuleCosignPolicy) effective(base CosignPolicy) CosignPolicy {
+	if p.Required != nil {
+		base.Required = *p.Required
+	}
+	if p.Mode != nil {
+		base.Mode = *p.Mode
+	}
+	if p.Key != nil {
+		base.Key = *p.Key
+	}
+	if p.Issuer != nil {
+		base.Issuer = *p.Issuer
+	}
+	if p.Identity != nil {
+		base.Identity = *p.Identity
+	}
+	if p.IdentityRegex != nil {
+		base.IdentityRegex = *p.IdentityRegex
+	}
+	return base
 }
 
 func validateAction(path, got string, allowed ...string) error {
@@ -234,12 +297,8 @@ func (p *yamlPolicyParser) setValue(lineNumber, indent int, key, value string) e
 		p.config.DefaultPolicy.FailedRegistryResolution.Action = value
 	case p.paths[0] == "default_policy" && p.paths[2] == "failed_signature_check" && key == "action":
 		p.config.DefaultPolicy.FailedSignatureCheck.Action = value
-	case p.paths[0] == "default_policy" && p.paths[2] == "signatures" && p.paths[4] == "cosign" && key == "required":
-		parsed, err := parseBool(value)
-		if err != nil {
-			return fmt.Errorf("line %d: default_policy.signatures.cosign.required must be true or false", lineNumber)
-		}
-		p.config.DefaultPolicy.Signatures.Cosign.Required = parsed
+	case p.paths[0] == "default_policy" && p.paths[2] == "signatures" && p.paths[4] == "cosign":
+		return setCosignValue(lineNumber, "default_policy.signatures.cosign", key, value, &p.config.DefaultPolicy.Signatures.Cosign)
 	case p.paths[0] == "audit" && key == "path":
 		p.config.Audit.Path = value
 	case p.paths[0] == "state" && key == "backend":
@@ -259,12 +318,8 @@ func (p *yamlPolicyParser) setRuleValue(lineNumber, indent int, key, value strin
 	if p.paths[indent-2] == "mutable_tags" {
 		return setRuleMutableTagValue(lineNumber, key, value, &rule.MutableTags)
 	}
-	if p.paths[indent-4] == "signatures" && p.paths[indent-2] == "cosign" && key == "required" {
-		parsed, err := parseBool(value)
-		if err != nil {
-			return fmt.Errorf("line %d: rule signatures.cosign.required must be true or false", lineNumber)
-		}
-		rule.Signatures.Cosign.Required = &parsed
+	if p.paths[indent-4] == "signatures" && p.paths[indent-2] == "cosign" {
+		return setRuleCosignValue(lineNumber, key, value, &rule.Signatures.Cosign)
 	}
 	return nil
 }
@@ -305,6 +360,50 @@ func setRuleMutableTagValue(lineNumber int, key, value string, target *RuleMutab
 			return fmt.Errorf("line %d: rule mutable_tags.%s must be true or false", lineNumber, key)
 		}
 		target.AllowFirstSeenPull = &parsed
+	}
+	return nil
+}
+
+func setCosignValue(lineNumber int, path, key, value string, target *CosignPolicy) error {
+	switch key {
+	case "required":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: %s.required must be true or false", lineNumber, path)
+		}
+		target.Required = parsed
+	case "mode":
+		target.Mode = value
+	case "key":
+		target.Key = value
+	case "issuer":
+		target.Issuer = value
+	case "identity":
+		target.Identity = value
+	case "identity_regex":
+		target.IdentityRegex = value
+	}
+	return nil
+}
+
+func setRuleCosignValue(lineNumber int, key, value string, target *RuleCosignPolicy) error {
+	switch key {
+	case "required":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: rule signatures.cosign.required must be true or false", lineNumber)
+		}
+		target.Required = &parsed
+	case "mode":
+		target.Mode = &value
+	case "key":
+		target.Key = &value
+	case "issuer":
+		target.Issuer = &value
+	case "identity":
+		target.Identity = &value
+	case "identity_regex":
+		target.IdentityRegex = &value
 	}
 	return nil
 }

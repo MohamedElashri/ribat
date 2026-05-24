@@ -948,6 +948,21 @@ func printPolicyCheck(w io.Writer, ref image.Reference, result policy.MatchResul
 	fmt.Fprintf(w, "  action: %s\n", p.FailedSignatureCheck.Action)
 	fmt.Fprintln(w, "Signatures:")
 	fmt.Fprintf(w, "  cosign.required: %t\n", p.Signatures.Cosign.Required)
+	if p.Signatures.Cosign.Mode != "" {
+		fmt.Fprintf(w, "  cosign.mode: %s\n", p.Signatures.Cosign.Mode)
+	}
+	if p.Signatures.Cosign.Key != "" {
+		fmt.Fprintf(w, "  cosign.key: %s\n", p.Signatures.Cosign.Key)
+	}
+	if p.Signatures.Cosign.Issuer != "" {
+		fmt.Fprintf(w, "  cosign.issuer: %s\n", p.Signatures.Cosign.Issuer)
+	}
+	if p.Signatures.Cosign.Identity != "" {
+		fmt.Fprintf(w, "  cosign.identity: %s\n", p.Signatures.Cosign.Identity)
+	}
+	if p.Signatures.Cosign.IdentityRegex != "" {
+		fmt.Fprintf(w, "  cosign.identity_regex: %s\n", p.Signatures.Cosign.IdentityRegex)
+	}
 }
 
 func printDecision(w io.Writer, decision quarantine.Decision) {
@@ -974,6 +989,13 @@ func printDecision(w io.Writer, decision quarantine.Decision) {
 		fmt.Fprintln(w, "Decision: DENY")
 	}
 	fmt.Fprintf(w, "Reason: %s\n", decision.Reason)
+	if decision.CosignVerified {
+		if decision.CosignCached {
+			fmt.Fprintln(w, "Cosign: verified (cached)")
+		} else {
+			fmt.Fprintln(w, "Cosign: verified")
+		}
+	}
 	if decision.ManualApproval {
 		fmt.Fprintln(w, "Manual approval: active")
 	}

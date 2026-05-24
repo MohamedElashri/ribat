@@ -14,6 +14,7 @@ import (
 	"github.com/MohamedElashri/ribat/internal/policy"
 	"github.com/MohamedElashri/ribat/internal/registry"
 	"github.com/MohamedElashri/ribat/internal/store"
+	"github.com/MohamedElashri/ribat/internal/verify"
 )
 
 func TestFirstSeenMutableDigestIsDeniedRecordedAndAudited(t *testing.T) {
@@ -177,10 +178,11 @@ func TestRegistryFailureDeniesByDefault(t *testing.T) {
 	}
 }
 
-func TestSignatureRequiredDeniesWhenVerifierUnavailable(t *testing.T) {
+func TestSignatureRequiredDeniesWhenVerifierFails(t *testing.T) {
 	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
 	engine, db, _ := newTestEngine(t, "sha256:first", now.Add(8*24*time.Hour), true)
 	engine.Config.DefaultPolicy.Signatures.Cosign.Required = true
+	engine.Verifier = &fakeCosignVerifier{result: verify.CosignResult{Success: false, Reason: "no matching signatures"}}
 	if _, err := db.CreateObservation(context.Background(), "example.test", "example/app", "latest", "sha256:first", now); err != nil {
 		t.Fatalf("CreateObservation() error = %v", err)
 	}
@@ -192,8 +194,71 @@ func TestSignatureRequiredDeniesWhenVerifierUnavailable(t *testing.T) {
 	if decision.Allowed {
 		t.Fatal("decision allowed = true, want deny")
 	}
-	if !strings.Contains(decision.Reason, "cosign verification is required") {
+	if !strings.Contains(decision.Reason, "no matching signatures") {
 		t.Fatalf("reason = %q, want signature requirement", decision.Reason)
+	}
+}
+
+func TestSignatureRequiredAllowsWhenVerifierSucceedsAndCachesResult(t *testing.T) {
+	firstSeen := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	engine, db, _ := newTestEngine(t, "sha256:first", firstSeen.Add(8*24*time.Hour), true)
+	engine.Config.DefaultPolicy.Signatures.Cosign = policy.CosignPolicy{
+		Required:      true,
+		Mode:          "keyless",
+		Issuer:        "https://token.actions.githubusercontent.com",
+		IdentityRegex: "^https://github.com/example/app/",
+	}
+	verifier := &fakeCosignVerifier{result: verify.CosignResult{Success: true, Reason: "ok"}}
+	engine.Verifier = verifier
+	if _, err := db.CreateObservation(context.Background(), "example.test", "example/app", "latest", "sha256:first", firstSeen); err != nil {
+		t.Fatalf("CreateObservation() error = %v", err)
+	}
+
+	decision, err := engine.Decide(context.Background(), Request{ImageRef: "example.test/example/app:latest"})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if !decision.Allowed || !decision.CosignVerified || decision.CosignCached {
+		t.Fatalf("decision = %#v, want verified allow without cache", decision)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls = %d, want 1", verifier.calls)
+	}
+
+	second, err := engine.Decide(context.Background(), Request{ImageRef: "example.test/example/app:latest"})
+	if err != nil {
+		t.Fatalf("second Decide() error = %v", err)
+	}
+	if !second.Allowed || !second.CosignVerified || !second.CosignCached {
+		t.Fatalf("second decision = %#v, want cached verified allow", second)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls after cache = %d, want 1", verifier.calls)
+	}
+}
+
+func TestBypassDoesNotBypassRequiredSignatureVerification(t *testing.T) {
+	firstSeen := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	engine, db, _ := newTestEngine(t, "sha256:first", firstSeen.Add(time.Hour), true)
+	engine.Config.DefaultPolicy.Signatures.Cosign.Required = true
+	engine.Verifier = &fakeCosignVerifier{result: verify.CosignResult{Success: false, Reason: "unsigned"}}
+	if _, err := db.CreateObservation(context.Background(), "example.test", "example/app", "latest", "sha256:first", firstSeen); err != nil {
+		t.Fatalf("CreateObservation() error = %v", err)
+	}
+	expiresAt := firstSeen.Add(2 * time.Hour)
+	if _, err := db.BypassTag(context.Background(), "example.test", "example/app", "latest", firstSeen.Add(time.Minute), "alice", "incident", &expiresAt); err != nil {
+		t.Fatalf("BypassTag() error = %v", err)
+	}
+
+	decision, err := engine.Decide(context.Background(), Request{ImageRef: "example.test/example/app:latest"})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Allowed {
+		t.Fatalf("decision = %#v, want signature deny despite bypass", decision)
+	}
+	if !decision.Bypassed || !strings.Contains(decision.Reason, "unsigned") {
+		t.Fatalf("decision = %#v, want bypass recorded and signature failure reason", decision)
 	}
 }
 
@@ -244,6 +309,20 @@ func testConfig() policy.Config {
 type fakeResolver struct {
 	digest string
 	err    error
+}
+
+type fakeCosignVerifier struct {
+	result verify.CosignResult
+	err    error
+	calls  int
+}
+
+func (v *fakeCosignVerifier) Verify(context.Context, image.Reference, string, policy.CosignPolicy) (verify.CosignResult, error) {
+	v.calls++
+	if v.err != nil {
+		return verify.CosignResult{}, v.err
+	}
+	return v.result, nil
 }
 
 func (r fakeResolver) Resolve(_ context.Context, ref image.Reference) (registry.ManifestDigest, error) {

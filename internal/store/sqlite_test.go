@@ -199,6 +199,40 @@ func TestRecordDecision(t *testing.T) {
 	}
 }
 
+func TestCosignVerificationCacheUsesPolicyKey(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t)
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+
+	err := db.RecordCosignVerification(ctx, CosignVerification{
+		Registry:   "ghcr.io",
+		Repository: "example/app",
+		Digest:     "sha256:first",
+		PolicyKey:  "sha256:policy-a",
+		ImageRef:   "ghcr.io/example/app@sha256:first",
+		VerifiedAt: now,
+		Success:    true,
+		Reason:     "ok",
+	})
+	if err != nil {
+		t.Fatalf("RecordCosignVerification() error = %v", err)
+	}
+	cached, err := db.GetCosignVerification(ctx, "ghcr.io", "example/app", "sha256:first", "sha256:policy-a")
+	if err != nil {
+		t.Fatalf("GetCosignVerification() error = %v", err)
+	}
+	if cached == nil || !cached.Success || cached.Reason != "ok" {
+		t.Fatalf("cached verification = %#v, want successful result", cached)
+	}
+	otherPolicy, err := db.GetCosignVerification(ctx, "ghcr.io", "example/app", "sha256:first", "sha256:policy-b")
+	if err != nil {
+		t.Fatalf("GetCosignVerification(other policy) error = %v", err)
+	}
+	if otherPolicy != nil {
+		t.Fatalf("other policy cache = %#v, want nil", otherPolicy)
+	}
+}
+
 func TestExportImportPreservesObservationsAndApprovals(t *testing.T) {
 	ctx := context.Background()
 	source := newTestStore(t)
@@ -210,6 +244,18 @@ func TestExportImportPreservesObservationsAndApprovals(t *testing.T) {
 	}
 	if _, err := source.ApproveDigest(ctx, "docker.io", "library/nginx", "latest", "sha256:first", now, "alice", "reviewed", &expiresAt); err != nil {
 		t.Fatalf("ApproveDigest() error = %v", err)
+	}
+	if err := source.RecordCosignVerification(ctx, CosignVerification{
+		Registry:   "docker.io",
+		Repository: "library/nginx",
+		Digest:     "sha256:first",
+		PolicyKey:  "sha256:policy",
+		ImageRef:   "docker.io/library/nginx@sha256:first",
+		VerifiedAt: now,
+		Success:    true,
+		Reason:     "ok",
+	}); err != nil {
+		t.Fatalf("RecordCosignVerification() error = %v", err)
 	}
 	exported, err := source.ExportState(ctx)
 	if err != nil {
@@ -233,6 +279,13 @@ func TestExportImportPreservesObservationsAndApprovals(t *testing.T) {
 	}
 	if approval == nil || approval.Reason != "reviewed" {
 		t.Fatalf("imported approval = %#v, want reviewed approval", approval)
+	}
+	verification, err := target.GetCosignVerification(ctx, "docker.io", "library/nginx", "sha256:first", "sha256:policy")
+	if err != nil {
+		t.Fatalf("GetCosignVerification() error = %v", err)
+	}
+	if verification == nil || !verification.Success {
+		t.Fatalf("imported cosign verification = %#v, want success", verification)
 	}
 }
 

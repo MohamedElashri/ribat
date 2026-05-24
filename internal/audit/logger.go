@@ -9,18 +9,20 @@ import (
 )
 
 type Event struct {
-	Timestamp     time.Time `json:"timestamp"`
-	ImageRef      string    `json:"image_ref"`
-	Registry      string    `json:"registry,omitempty"`
-	Repository    string    `json:"repository,omitempty"`
-	Tag           string    `json:"tag,omitempty"`
-	Digest        string    `json:"digest,omitempty"`
-	Decision      string    `json:"decision"`
-	Reason        string    `json:"reason"`
-	MatchedRule   string    `json:"matched_rule,omitempty"`
-	ClientUser    string    `json:"client_user,omitempty"`
-	RequestMethod string    `json:"request_method,omitempty"`
-	RequestURI    string    `json:"request_uri,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+	ImageRef       string    `json:"image_ref"`
+	Registry       string    `json:"registry,omitempty"`
+	Repository     string    `json:"repository,omitempty"`
+	Tag            string    `json:"tag,omitempty"`
+	Digest         string    `json:"digest,omitempty"`
+	Decision       string    `json:"decision"`
+	Reason         string    `json:"reason"`
+	MatchedRule    string    `json:"matched_rule,omitempty"`
+	ClientUser     string    `json:"client_user,omitempty"`
+	RequestMethod  string    `json:"request_method,omitempty"`
+	RequestURI     string    `json:"request_uri,omitempty"`
+	CosignVerified bool      `json:"cosign_verified,omitempty"`
+	CosignCached   bool      `json:"cosign_cached,omitempty"`
 }
 
 type Logger struct {

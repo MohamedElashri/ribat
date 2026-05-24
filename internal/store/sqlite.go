@@ -85,6 +85,18 @@ type Bypass struct {
 	ExpiresAt  *time.Time
 }
 
+type CosignVerification struct {
+	ID         int64
+	Registry   string
+	Repository string
+	Digest     string
+	PolicyKey  string
+	ImageRef   string
+	VerifiedAt time.Time
+	Success    bool
+	Reason     string
+}
+
 type LocalOverride struct {
 	Approval *Approval
 	Freeze   *Freeze
@@ -93,12 +105,13 @@ type LocalOverride struct {
 }
 
 type ExportedState struct {
-	Version      int              `json:"version"`
-	Observations []Observation    `json:"observations"`
-	Decisions    []DecisionRecord `json:"decisions"`
-	Approvals    []Approval       `json:"approvals"`
-	Freezes      []Freeze         `json:"freezes"`
-	Bypasses     []Bypass         `json:"bypasses"`
+	Version      int                  `json:"version"`
+	Observations []Observation        `json:"observations"`
+	Decisions    []DecisionRecord     `json:"decisions"`
+	Approvals    []Approval           `json:"approvals"`
+	Freezes      []Freeze             `json:"freezes"`
+	Bypasses     []Bypass             `json:"bypasses"`
+	Cosign       []CosignVerification `json:"cosign_verifications"`
 }
 
 func OpenSQLite(path string) (*SQLiteStore, error) {
@@ -190,6 +203,19 @@ CREATE TABLE IF NOT EXISTS bypasses (
     created_by TEXT,
     reason TEXT,
     expires_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS cosign_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    registry TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    policy_key TEXT NOT NULL,
+    image_ref TEXT NOT NULL,
+    verified_at INTEGER NOT NULL,
+    success INTEGER NOT NULL,
+    reason TEXT,
+    UNIQUE(registry, repository, digest, policy_key)
 );`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -382,6 +408,33 @@ WHERE id = ?`, id)
 	return scanBypass(row)
 }
 
+func (s *SQLiteStore) GetCosignVerification(ctx context.Context, registry, repository, digest, policyKey string) (*CosignVerification, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, registry, repository, digest, policy_key, image_ref, verified_at, success, reason
+FROM cosign_verifications
+WHERE registry = ? AND repository = ? AND digest = ? AND policy_key = ?`,
+		registry, repository, digest, policyKey)
+	return scanCosignVerification(row)
+}
+
+func (s *SQLiteStore) RecordCosignVerification(ctx context.Context, record CosignVerification) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO cosign_verifications
+    (registry, repository, digest, policy_key, image_ref, verified_at, success, reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(registry, repository, digest, policy_key) DO UPDATE SET
+    image_ref = excluded.image_ref,
+    verified_at = excluded.verified_at,
+    success = excluded.success,
+    reason = excluded.reason`,
+		record.Registry, record.Repository, record.Digest, record.PolicyKey, record.ImageRef,
+		unix(record.VerifiedAt), boolInt(record.Success), record.Reason)
+	if err != nil {
+		return fmt.Errorf("record cosign verification: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) ActiveApproval(ctx context.Context, registry, repository, tag, digest string, now time.Time) (*Approval, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, registry, repository, tag, digest, approved_at, approved_by, reason, expires_at
@@ -462,6 +515,10 @@ func (s *SQLiteStore) ExportState(ctx context.Context) (ExportedState, error) {
 	if err != nil {
 		return ExportedState{}, err
 	}
+	cosign, err := s.listCosignVerifications(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
 	return ExportedState{
 		Version:      1,
 		Observations: observations,
@@ -469,6 +526,7 @@ func (s *SQLiteStore) ExportState(ctx context.Context) (ExportedState, error) {
 		Approvals:    approvals,
 		Freezes:      freezes,
 		Bypasses:     bypasses,
+		Cosign:       cosign,
 	}, nil
 }
 
@@ -531,6 +589,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			bypass.ID, bypass.Registry, bypass.Repository, bypass.Tag, unix(bypass.CreatedAt), bypass.CreatedBy, bypass.Reason, nullableUnix(bypass.ExpiresAt))
 		if err != nil {
 			return fmt.Errorf("import bypass %s/%s:%s: %w", bypass.Registry, bypass.Repository, bypass.Tag, err)
+		}
+	}
+	for _, verification := range state.Cosign {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO cosign_verifications
+    (id, registry, repository, digest, policy_key, image_ref, verified_at, success, reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			verification.ID, verification.Registry, verification.Repository, verification.Digest, verification.PolicyKey,
+			verification.ImageRef, unix(verification.VerifiedAt), boolInt(verification.Success), verification.Reason)
+		if err != nil {
+			return fmt.Errorf("import cosign verification %s/%s@%s: %w", verification.Registry, verification.Repository, verification.Digest, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -633,6 +702,30 @@ ORDER BY id ASC`)
 		return nil, fmt.Errorf("list bypasses: %w", err)
 	}
 	return bypasses, nil
+}
+
+func (s *SQLiteStore) listCosignVerifications(ctx context.Context) ([]CosignVerification, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, registry, repository, digest, policy_key, image_ref, verified_at, success, reason
+FROM cosign_verifications
+ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list cosign verifications: %w", err)
+	}
+	defer rows.Close()
+
+	var verifications []CosignVerification
+	for rows.Next() {
+		verification, err := scanCosignVerificationRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		verifications = append(verifications, verification)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list cosign verifications: %w", err)
+	}
+	return verifications, nil
 }
 
 func scanObservation(scanner interface {
@@ -810,6 +903,43 @@ func scanBypassValue(scanner interface {
 	return bypass, nil
 }
 
+func scanCosignVerification(scanner interface {
+	Scan(dest ...any) error
+}) (*CosignVerification, error) {
+	verification, err := scanCosignVerificationValue(scanner)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get cosign verification: %w", err)
+	}
+	return &verification, nil
+}
+
+func scanCosignVerificationRows(scanner interface {
+	Scan(dest ...any) error
+}) (CosignVerification, error) {
+	verification, err := scanCosignVerificationValue(scanner)
+	if err != nil {
+		return CosignVerification{}, fmt.Errorf("list cosign verifications: %w", err)
+	}
+	return verification, nil
+}
+
+func scanCosignVerificationValue(scanner interface {
+	Scan(dest ...any) error
+}) (CosignVerification, error) {
+	var verification CosignVerification
+	var verifiedAt int64
+	var success int
+	if err := scanner.Scan(&verification.ID, &verification.Registry, &verification.Repository, &verification.Digest, &verification.PolicyKey, &verification.ImageRef, &verifiedAt, &success, &verification.Reason); err != nil {
+		return CosignVerification{}, err
+	}
+	verification.VerifiedAt = time.Unix(verifiedAt, 0).UTC()
+	verification.Success = success != 0
+	return verification, nil
+}
+
 func requireAffected(result sql.Result, operation string) error {
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -837,4 +967,11 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

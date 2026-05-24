@@ -10,6 +10,7 @@ import (
 	"github.com/MohamedElashri/ribat/internal/policy"
 	"github.com/MohamedElashri/ribat/internal/registry"
 	"github.com/MohamedElashri/ribat/internal/store"
+	"github.com/MohamedElashri/ribat/internal/verify"
 )
 
 type Resolver interface {
@@ -20,10 +21,15 @@ type AuditRecorder interface {
 	Record(audit.Event) error
 }
 
+type CosignVerifier interface {
+	Verify(context.Context, image.Reference, string, policy.CosignPolicy) (verify.CosignResult, error)
+}
+
 type Engine struct {
 	Config   policy.Config
 	Store    *store.SQLiteStore
 	Resolver Resolver
+	Verifier CosignVerifier
 	Audit    AuditRecorder
 	Now      func() time.Time
 }
@@ -51,6 +57,8 @@ type Decision struct {
 	ManualApproval bool
 	Bypassed       bool
 	Frozen         bool
+	CosignVerified bool
+	CosignCached   bool
 }
 
 func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
@@ -179,8 +187,9 @@ func (e *Engine) decideDigestPinned(ctx context.Context, ref image.Reference, p 
 		return nil
 	}
 	if p.Signatures.Cosign.Required {
-		decision.Reason = "cosign verification is required but no verifier is available"
-		return nil
+		if !e.verifyCosign(ctx, ref, ref.Digest, p.Signatures.Cosign, now, decision) {
+			return nil
+		}
 	}
 	decision.Allowed = true
 	decision.ManualApproval = override.Approval != nil
@@ -190,9 +199,13 @@ func (e *Engine) decideDigestPinned(ctx context.Context, ref image.Reference, p 
 }
 
 func (e *Engine) allowWithVerification(ctx context.Context, p policy.EffectivePolicy, now time.Time, obs *store.Observation, decision *Decision) {
-	if p.Signatures.Cosign.Required {
-		decision.Allowed = false
-		decision.Reason = "cosign verification is required but no verifier is available"
+	ref := image.Reference{
+		Registry:     decision.Registry,
+		Repository:   decision.Repository,
+		Tag:          decision.Tag,
+		CanonicalRef: decision.ImageRef,
+	}
+	if p.Signatures.Cosign.Required && !e.verifyCosign(ctx, ref, decision.Digest, p.Signatures.Cosign, now, decision) {
 		return
 	}
 	if err := e.Store.MarkObservationAllowed(ctx, obs.ID, now); err != nil {
@@ -209,7 +222,64 @@ func (e *Engine) allowWithVerification(ctx context.Context, p policy.EffectivePo
 		decision.Reason = "tag bypass active"
 		return
 	}
+	if decision.CosignVerified {
+		decision.Reason = "digest satisfies quarantine and cosign verification policy"
+		return
+	}
 	decision.Reason = "digest satisfies quarantine policy"
+}
+
+func (e *Engine) verifyCosign(ctx context.Context, ref image.Reference, digest string, cfg policy.CosignPolicy, now time.Time, decision *Decision) bool {
+	policyKey := verify.CosignPolicyKey(cfg)
+	cached, err := e.Store.GetCosignVerification(ctx, ref.Registry, ref.Repository, digest, policyKey)
+	if err != nil {
+		decision.Allowed = false
+		decision.Reason = fmt.Sprintf("could not read cosign verification cache: %v", err)
+		return false
+	}
+	if cached != nil && cached.Success {
+		decision.CosignVerified = true
+		decision.CosignCached = true
+		return true
+	}
+
+	verifier := e.Verifier
+	if verifier == nil {
+		defaultVerifier := verify.NewCosignVerifier("")
+		verifier = defaultVerifier
+	}
+	result, err := verifier.Verify(ctx, ref, digest, cfg)
+	if err != nil {
+		decision.Allowed = false
+		decision.Reason = fmt.Sprintf("cosign verification failed: %v", err)
+		return false
+	}
+	record := store.CosignVerification{
+		Registry:   ref.Registry,
+		Repository: ref.Repository,
+		Digest:     digest,
+		PolicyKey:  policyKey,
+		ImageRef:   verify.DigestReference(ref, digest),
+		VerifiedAt: now,
+		Success:    result.Success,
+		Reason:     result.Reason,
+	}
+	if err := e.Store.RecordCosignVerification(ctx, record); err != nil {
+		decision.Allowed = false
+		decision.Reason = fmt.Sprintf("could not cache cosign verification result: %v", err)
+		return false
+	}
+	if !result.Success {
+		decision.Allowed = false
+		if result.Reason == "" {
+			decision.Reason = "cosign verification failed"
+		} else {
+			decision.Reason = "cosign verification failed: " + result.Reason
+		}
+		return false
+	}
+	decision.CosignVerified = true
+	return true
 }
 
 func (e *Engine) record(ctx context.Context, req Request, decision Decision, now time.Time) error {
@@ -236,18 +306,20 @@ func (e *Engine) record(ctx context.Context, req Request, decision Decision, now
 		return nil
 	}
 	return e.Audit.Record(audit.Event{
-		Timestamp:     now,
-		ImageRef:      decision.ImageRef,
-		Registry:      decision.Registry,
-		Repository:    decision.Repository,
-		Tag:           decision.Tag,
-		Digest:        decision.Digest,
-		Decision:      record.Decision,
-		Reason:        decision.Reason,
-		MatchedRule:   decision.MatchedRule,
-		ClientUser:    req.ClientUser,
-		RequestMethod: req.RequestMethod,
-		RequestURI:    req.RequestURI,
+		Timestamp:      now,
+		ImageRef:       decision.ImageRef,
+		Registry:       decision.Registry,
+		Repository:     decision.Repository,
+		Tag:            decision.Tag,
+		Digest:         decision.Digest,
+		Decision:       record.Decision,
+		Reason:         decision.Reason,
+		MatchedRule:    decision.MatchedRule,
+		ClientUser:     req.ClientUser,
+		RequestMethod:  req.RequestMethod,
+		RequestURI:     req.RequestURI,
+		CosignVerified: decision.CosignVerified,
+		CosignCached:   decision.CosignCached,
 	})
 }
 

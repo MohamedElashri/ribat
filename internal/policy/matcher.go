@@ -46,6 +46,21 @@ func applyRule(effective *EffectivePolicy, rule Rule) {
 	if rule.Signatures.Cosign.Required != nil {
 		effective.Signatures.Cosign.Required = *rule.Signatures.Cosign.Required
 	}
+	if rule.Signatures.Cosign.Mode != nil {
+		effective.Signatures.Cosign.Mode = *rule.Signatures.Cosign.Mode
+	}
+	if rule.Signatures.Cosign.Key != nil {
+		effective.Signatures.Cosign.Key = *rule.Signatures.Cosign.Key
+	}
+	if rule.Signatures.Cosign.Issuer != nil {
+		effective.Signatures.Cosign.Issuer = *rule.Signatures.Cosign.Issuer
+	}
+	if rule.Signatures.Cosign.Identity != nil {
+		effective.Signatures.Cosign.Identity = *rule.Signatures.Cosign.Identity
+	}
+	if rule.Signatures.Cosign.IdentityRegex != nil {
+		effective.Signatures.Cosign.IdentityRegex = *rule.Signatures.Cosign.IdentityRegex
+	}
 }
 
 func matchPattern(pattern string, ref image.Reference) (bool, error) {

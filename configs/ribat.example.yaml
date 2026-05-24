@@ -15,6 +15,10 @@ default_policy:
   failed_signature_check:
     action: deny
 
+  signatures:
+    cosign:
+      required: false
+
 rules:
   - match: "*:latest"
     mutable_tags:
@@ -35,6 +39,15 @@ rules:
     mutable_tags:
       min_digest_age: 3d
       allow_first_seen_pull: false
+
+  # Example for projects that publish keyless Cosign signatures.
+  # - match: "ghcr.io/example/app:*"
+  #   signatures:
+  #     cosign:
+  #       required: true
+  #       mode: keyless
+  #       issuer: "https://token.actions.githubusercontent.com"
+  #       identity_regex: "^https://github.com/example/app/.github/workflows/release.yml@refs/tags/v.*$"
 
 audit:
   path: "/var/log/ribat/audit.jsonl"

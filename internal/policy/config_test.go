@@ -29,6 +29,7 @@ default_policy:
   signatures:
     cosign:
       required: false
+      mode: keyless
 
 rules:
   - match: "docker.io/library/nginx:latest"
@@ -48,6 +49,8 @@ rules:
     signatures:
       cosign:
         required: true
+        issuer: "https://token.actions.githubusercontent.com"
+        identity_regex: "^https://github.com/example/signed/.github/workflows/release.yml@refs/tags/v.*$"
 `
 
 func TestLoadPolicy(t *testing.T) {
@@ -81,6 +84,23 @@ func TestEffectivePolicyForSignatureRule(t *testing.T) {
 	}
 	if !result.Policy.Signatures.Cosign.Required {
 		t.Fatal("cosign required = false, want true")
+	}
+	if result.Policy.Signatures.Cosign.Issuer != "https://token.actions.githubusercontent.com" {
+		t.Fatalf("cosign issuer = %q, want GitHub Actions issuer", result.Policy.Signatures.Cosign.Issuer)
+	}
+	if result.Policy.Signatures.Cosign.IdentityRegex == "" {
+		t.Fatal("cosign identity regex = empty, want rule overlay")
+	}
+}
+
+func TestLoadPolicyRejectsRequiredKeylessCosignWithoutIdentity(t *testing.T) {
+	input := strings.Replace(testPolicy, `identity_regex: "^https://github.com/example/signed/.github/workflows/release.yml@refs/tags/v.*$"`, "", 1)
+	_, err := Load(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing identity error")
+	}
+	if !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("error = %q, want identity context", err.Error())
 	}
 }
 

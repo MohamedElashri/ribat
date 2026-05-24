@@ -1,2 +1,2 @@
-// Package verify will contain optional signature, provenance, and allowlist checks.
+// Package verify contains optional signature, provenance, and allowlist checks.
 package verify
