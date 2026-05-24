@@ -43,6 +43,9 @@ func applyRule(effective *EffectivePolicy, rule Rule) {
 	if rule.MutableTags.AllowFirstSeenPull != nil {
 		effective.MutableTags.AllowFirstSeenPull = *rule.MutableTags.AllowFirstSeenPull
 	}
+	if rule.Signatures.Cosign.Required != nil {
+		effective.Signatures.Cosign.Required = *rule.Signatures.Cosign.Required
+	}
 }
 
 func matchPattern(pattern string, ref image.Reference) (bool, error) {

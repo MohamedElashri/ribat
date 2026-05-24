@@ -26,6 +26,10 @@ default_policy:
   failed_signature_check:
     action: deny
 
+  signatures:
+    cosign:
+      required: false
+
 rules:
   - match: "docker.io/library/nginx:latest"
     mutable_tags:
@@ -39,6 +43,11 @@ rules:
   - match: "*:main"
     mutable_tags:
       min_digest_age: 24h
+
+  - match: "ghcr.io/example/signed:*"
+    signatures:
+      cosign:
+        required: true
 `
 
 func TestLoadPolicy(t *testing.T) {
@@ -56,8 +65,22 @@ func TestLoadPolicy(t *testing.T) {
 	if cfg.DefaultPolicy.MutableTags.MinDigestAge.Duration != 7*24*time.Hour {
 		t.Fatalf("default min age = %s, want 7d", cfg.DefaultPolicy.MutableTags.MinDigestAge)
 	}
-	if len(cfg.Rules) != 3 {
-		t.Fatalf("rules length = %d, want 3", len(cfg.Rules))
+	if len(cfg.Rules) != 4 {
+		t.Fatalf("rules length = %d, want 4", len(cfg.Rules))
+	}
+}
+
+func TestEffectivePolicyForSignatureRule(t *testing.T) {
+	cfg, err := Load(strings.NewReader(testPolicy))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	result, err := cfg.EffectivePolicyFor(mustParseRef(t, "ghcr.io/example/signed:latest"))
+	if err != nil {
+		t.Fatalf("EffectivePolicyFor() error = %v", err)
+	}
+	if !result.Policy.Signatures.Cosign.Required {
+		t.Fatal("cosign required = false, want true")
 	}
 }
 

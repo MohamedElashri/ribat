@@ -28,6 +28,7 @@ type EffectivePolicy struct {
 	DigestPinnedImages       ActionPolicy
 	FailedRegistryResolution ActionPolicy
 	FailedSignatureCheck     ActionPolicy
+	Signatures               SignaturesPolicy
 }
 
 type MutableTagPolicy struct {
@@ -40,15 +41,32 @@ type ActionPolicy struct {
 	Action string
 }
 
+type SignaturesPolicy struct {
+	Cosign CosignPolicy
+}
+
+type CosignPolicy struct {
+	Required bool
+}
+
 type Rule struct {
 	Match       string
 	MutableTags RuleMutableTagPolicy
+	Signatures  RuleSignaturesPolicy
 }
 
 type RuleMutableTagPolicy struct {
 	Action             *string
 	MinDigestAge       *Duration
 	AllowFirstSeenPull *bool
+}
+
+type RuleSignaturesPolicy struct {
+	Cosign RuleCosignPolicy
+}
+
+type RuleCosignPolicy struct {
+	Required *bool
 }
 
 type AuditConfig struct {
@@ -216,6 +234,12 @@ func (p *yamlPolicyParser) setValue(lineNumber, indent int, key, value string) e
 		p.config.DefaultPolicy.FailedRegistryResolution.Action = value
 	case p.paths[0] == "default_policy" && p.paths[2] == "failed_signature_check" && key == "action":
 		p.config.DefaultPolicy.FailedSignatureCheck.Action = value
+	case p.paths[0] == "default_policy" && p.paths[2] == "signatures" && p.paths[4] == "cosign" && key == "required":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: default_policy.signatures.cosign.required must be true or false", lineNumber)
+		}
+		p.config.DefaultPolicy.Signatures.Cosign.Required = parsed
 	case p.paths[0] == "audit" && key == "path":
 		p.config.Audit.Path = value
 	case p.paths[0] == "state" && key == "backend":
@@ -234,6 +258,13 @@ func (p *yamlPolicyParser) setRuleValue(lineNumber, indent int, key, value strin
 	}
 	if p.paths[indent-2] == "mutable_tags" {
 		return setRuleMutableTagValue(lineNumber, key, value, &rule.MutableTags)
+	}
+	if p.paths[indent-4] == "signatures" && p.paths[indent-2] == "cosign" && key == "required" {
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: rule signatures.cosign.required must be true or false", lineNumber)
+		}
+		rule.Signatures.Cosign.Required = &parsed
 	}
 	return nil
 }

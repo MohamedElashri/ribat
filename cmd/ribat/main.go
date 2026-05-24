@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MohamedElashri/ribat/internal/audit"
 	"github.com/MohamedElashri/ribat/internal/image"
 	"github.com/MohamedElashri/ribat/internal/policy"
+	"github.com/MohamedElashri/ribat/internal/quarantine"
 	"github.com/MohamedElashri/ribat/internal/registry"
 	"github.com/MohamedElashri/ribat/internal/store"
 	"github.com/MohamedElashri/ribat/internal/version"
@@ -20,6 +22,7 @@ const usage = `ribat guards mutable Docker image tags until their resolved diges
 Usage:
   ribat version
   ribat inspect IMAGE
+  ribat decide [--config PATH] IMAGE
   ribat policy check [--config PATH] IMAGE
   ribat status [--config PATH] IMAGE
   ribat help
@@ -41,6 +44,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
+	case "decide":
+		return runDecide(args[1:], stdout, stderr)
 	case "policy":
 		return runPolicy(args[1:], stdout, stderr)
 	case "status":
@@ -52,6 +57,51 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runDecide(args []string, stdout, stderr io.Writer) int {
+	configPath, imageRef, code := parseConfigAndImage(args, "decide", stderr)
+	if code != 0 {
+		return code
+	}
+
+	cfg, err := policy.LoadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not load policy: %v\n", err)
+		return 1
+	}
+	if cfg.State.Backend != "sqlite" {
+		fmt.Fprintf(stderr, "unsupported state backend %q; only sqlite is supported\n", cfg.State.Backend)
+		return 1
+	}
+	if cfg.State.Path == "" {
+		fmt.Fprintln(stderr, "state.path is required for decide")
+		return 1
+	}
+
+	db, err := store.OpenSQLite(cfg.State.Path)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not open local state: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	engine := quarantine.Engine{
+		Config:   cfg,
+		Store:    db,
+		Resolver: registry.NewResolver(nil),
+		Audit:    audit.NewLogger(cfg.Audit.Path),
+	}
+	decision, err := engine.Decide(context.Background(), quarantine.Request{ImageRef: imageRef})
+	if err != nil {
+		fmt.Fprintf(stderr, "could not decide pull: %v\n", err)
+		return 1
+	}
+	printDecision(stdout, decision)
+	if decision.Allowed {
+		return 0
+	}
+	return 1
 }
 
 func runInspect(args []string, stdout, stderr io.Writer) int {
@@ -245,6 +295,40 @@ func printPolicyCheck(w io.Writer, ref image.Reference, result policy.MatchResul
 	fmt.Fprintf(w, "  action: %s\n", p.FailedRegistryResolution.Action)
 	fmt.Fprintln(w, "Failed signature check:")
 	fmt.Fprintf(w, "  action: %s\n", p.FailedSignatureCheck.Action)
+	fmt.Fprintln(w, "Signatures:")
+	fmt.Fprintf(w, "  cosign.required: %t\n", p.Signatures.Cosign.Required)
+}
+
+func printDecision(w io.Writer, decision quarantine.Decision) {
+	fmt.Fprintf(w, "Image: %s\n", decision.ImageRef)
+	if decision.Digest != "" {
+		fmt.Fprintf(w, "Resolved digest: %s\n", decision.Digest)
+	}
+	fmt.Fprintf(w, "Matched rule: %s\n", decision.MatchedRule)
+	if decision.FirstSeenAt != nil {
+		fmt.Fprintf(w, "Digest first seen: %s\n", decision.FirstSeenAt.Format(time.RFC3339))
+	}
+	if decision.RequiredAge > 0 {
+		fmt.Fprintf(w, "Required minimum age: %s\n", policy.Duration{Duration: decision.RequiredAge})
+	}
+	if decision.CurrentAge > 0 {
+		fmt.Fprintf(w, "Current age: %s\n", decision.CurrentAge.Round(time.Second))
+	}
+	if decision.NextAllowedAt != nil {
+		fmt.Fprintf(w, "Next allowed pull: %s\n", decision.NextAllowedAt.Format(time.RFC3339))
+	}
+	if decision.Allowed {
+		fmt.Fprintln(w, "Decision: ALLOW")
+	} else {
+		fmt.Fprintln(w, "Decision: DENY")
+	}
+	fmt.Fprintf(w, "Reason: %s\n", decision.Reason)
+	if decision.ManualApproval {
+		fmt.Fprintln(w, "Manual approval: active")
+	}
+	if decision.Frozen {
+		fmt.Fprintln(w, "Freeze: active")
+	}
 }
 
 func printStatus(w io.Writer, ref image.Reference, observations []store.Observation, db *store.SQLiteStore, now time.Time) {

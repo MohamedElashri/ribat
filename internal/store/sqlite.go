@@ -221,6 +221,17 @@ WHERE id = ?`, unix(now), id)
 	return requireAffected(result, "touch observation")
 }
 
+func (s *SQLiteStore) MarkObservationAllowed(ctx context.Context, id int64, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE tag_observations
+SET last_seen_at = ?, last_allowed_at = ?
+WHERE id = ?`, unix(now), unix(now), id)
+	if err != nil {
+		return fmt.Errorf("mark observation allowed: %w", err)
+	}
+	return requireAffected(result, "mark observation allowed")
+}
+
 func (s *SQLiteStore) RecordDecision(ctx context.Context, record DecisionRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO pull_decisions
@@ -232,6 +243,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		return fmt.Errorf("record decision: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) CountDecisions(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pull_decisions").Scan(&count); err != nil {
+		return 0, fmt.Errorf("count decisions: %w", err)
+	}
+	return count, nil
 }
 
 func (s *SQLiteStore) ApproveDigest(ctx context.Context, registry, repository, tag, digest string, approvedAt time.Time, approvedBy, reason string, expiresAt *time.Time) (*Approval, error) {

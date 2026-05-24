@@ -201,6 +201,45 @@ func TestRunStatusShowsKnownLocalState(t *testing.T) {
 	}
 }
 
+func TestRunDecideAllowsDigestPinnedImage(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	configPath := writeTestPolicyWithState(t, statePath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"decide", "--config", configPath, "ghcr.io/example/app@sha256:abc123"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(decide digest pinned) exit code = %d, stderr = %q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Image: ghcr.io/example/app@sha256:abc123",
+		"Decision: ALLOW",
+		"Reason: digest-pinned image allowed by policy",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("decide output = %q, want %q", output, want)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	db, err := store.OpenSQLite(statePath)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	defer db.Close()
+	count, err := db.CountDecisions(context.Background())
+	if err != nil {
+		t.Fatalf("CountDecisions() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("decision count = %d, want 1", count)
+	}
+}
+
 func writeTestPolicy(t *testing.T, content string) string {
 	t.Helper()
 
