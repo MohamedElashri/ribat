@@ -4,10 +4,7 @@ Ribat is a Docker image update gate for mutable tags such as `latest`, `stable`,
 
 The initial implementation is a Go command-line application. Future phases will add Docker authorization plugin mode, registry digest resolution, persistent quarantine state, verification checks, and audit logging.
 
-## Current Status
-
-This repository currently contains the Phase 0 project bootstrap:
-
+## Usage
 ```bash
 go run ./cmd/ribat version
 go test ./...
