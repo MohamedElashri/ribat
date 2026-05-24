@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MohamedElashri/ribat/internal/audit"
+	"github.com/MohamedElashri/ribat/internal/authz"
 	"github.com/MohamedElashri/ribat/internal/image"
 	"github.com/MohamedElashri/ribat/internal/policy"
 	"github.com/MohamedElashri/ribat/internal/quarantine"
@@ -23,6 +24,7 @@ Usage:
   ribat version
   ribat inspect IMAGE
   ribat decide [--config PATH] IMAGE
+  ribat authz [--config PATH] --socket PATH
   ribat policy check [--config PATH] IMAGE
   ribat status [--config PATH] IMAGE
   ribat help
@@ -46,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runInspect(args[1:], stdout, stderr)
 	case "decide":
 		return runDecide(args[1:], stdout, stderr)
+	case "authz":
+		return runAuthz(args[1:], stdout, stderr)
 	case "policy":
 		return runPolicy(args[1:], stdout, stderr)
 	case "status":
@@ -57,6 +61,80 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runAuthz(args []string, stdout, stderr io.Writer) int {
+	configPath := defaultConfigPath()
+	var socketPath string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--config":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "missing value for --config")
+				return 2
+			}
+			configPath = args[i+1]
+			i++
+		case "--socket":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "missing value for --socket")
+				return 2
+			}
+			socketPath = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(arg, "--config=") {
+				configPath = strings.TrimPrefix(arg, "--config=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--socket=") {
+				socketPath = strings.TrimPrefix(arg, "--socket=")
+				continue
+			}
+			fmt.Fprintf(stderr, "unknown argument %q for authz\n", arg)
+			return 2
+		}
+	}
+	if socketPath == "" {
+		fmt.Fprintln(stderr, "authz requires --socket PATH")
+		return 2
+	}
+
+	cfg, err := policy.LoadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not load policy: %v\n", err)
+		return 1
+	}
+	if cfg.State.Backend != "sqlite" {
+		fmt.Fprintf(stderr, "unsupported state backend %q; only sqlite is supported\n", cfg.State.Backend)
+		return 1
+	}
+	if cfg.State.Path == "" {
+		fmt.Fprintln(stderr, "state.path is required for authz")
+		return 1
+	}
+
+	db, err := store.OpenSQLite(cfg.State.Path)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not open local state: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	engine := quarantine.Engine{
+		Config:   cfg,
+		Store:    db,
+		Resolver: registry.NewResolver(nil),
+		Audit:    audit.NewLogger(cfg.Audit.Path),
+	}
+	fmt.Fprintf(stdout, "ribat authz listening on %s\n", socketPath)
+	if err := authz.ListenAndServe(context.Background(), socketPath, authz.Server{Engine: &engine}); err != nil {
+		fmt.Fprintf(stderr, "authz server failed: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runDecide(args []string, stdout, stderr io.Writer) int {

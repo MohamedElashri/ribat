@@ -240,6 +240,24 @@ func TestRunDecideAllowsDigestPinnedImage(t *testing.T) {
 	}
 }
 
+func TestRunAuthzRequiresSocket(t *testing.T) {
+	configPath := writeTestPolicyWithState(t, filepath.Join(t.TempDir(), "state.db"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"authz", "--config", configPath}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("run(authz without socket) exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "authz requires --socket PATH") {
+		t.Fatalf("stderr = %q, want socket requirement", stderr.String())
+	}
+}
+
 func writeTestPolicy(t *testing.T, content string) string {
 	t.Helper()
 
