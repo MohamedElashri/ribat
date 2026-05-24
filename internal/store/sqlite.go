@@ -36,6 +36,7 @@ type Observation struct {
 }
 
 type DecisionRecord struct {
+	ID            int64
 	Timestamp     time.Time
 	ImageRef      string
 	Registry      string
@@ -73,10 +74,31 @@ type Freeze struct {
 	ExpiresAt  *time.Time
 }
 
+type Bypass struct {
+	ID         int64
+	Registry   string
+	Repository string
+	Tag        string
+	CreatedAt  time.Time
+	CreatedBy  string
+	Reason     string
+	ExpiresAt  *time.Time
+}
+
 type LocalOverride struct {
 	Approval *Approval
 	Freeze   *Freeze
+	Bypass   *Bypass
 	Decision string
+}
+
+type ExportedState struct {
+	Version      int              `json:"version"`
+	Observations []Observation    `json:"observations"`
+	Decisions    []DecisionRecord `json:"decisions"`
+	Approvals    []Approval       `json:"approvals"`
+	Freezes      []Freeze         `json:"freezes"`
+	Bypasses     []Bypass         `json:"bypasses"`
 }
 
 func OpenSQLite(path string) (*SQLiteStore, error) {
@@ -153,6 +175,17 @@ CREATE TABLE IF NOT EXISTS freezes (
     repository TEXT NOT NULL,
     tag TEXT NOT NULL,
     digest TEXT,
+    created_at INTEGER NOT NULL,
+    created_by TEXT,
+    reason TEXT,
+    expires_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS bypasses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    registry TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    tag TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     created_by TEXT,
     reason TEXT,
@@ -253,6 +286,30 @@ func (s *SQLiteStore) CountDecisions(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+func (s *SQLiteStore) ListDecisions(ctx context.Context) ([]DecisionRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, timestamp, image_ref, registry, repository, tag, digest, decision, reason, client_user, request_method, request_uri
+FROM pull_decisions
+ORDER BY timestamp ASC, id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list decisions: %w", err)
+	}
+	defer rows.Close()
+
+	var decisions []DecisionRecord
+	for rows.Next() {
+		decision, err := scanDecisionRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, decision)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list decisions: %w", err)
+	}
+	return decisions, nil
+}
+
 func (s *SQLiteStore) ApproveDigest(ctx context.Context, registry, repository, tag, digest string, approvedAt time.Time, approvedBy, reason string, expiresAt *time.Time) (*Approval, error) {
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO approvals
@@ -285,6 +342,22 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	return s.GetFreeze(ctx, id)
 }
 
+func (s *SQLiteStore) BypassTag(ctx context.Context, registry, repository, tag string, createdAt time.Time, createdBy, reason string, expiresAt *time.Time) (*Bypass, error) {
+	res, err := s.db.ExecContext(ctx, `
+INSERT INTO bypasses
+    (registry, repository, tag, created_at, created_by, reason, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		registry, repository, tag, unix(createdAt), createdBy, reason, nullableUnix(expiresAt))
+	if err != nil {
+		return nil, fmt.Errorf("bypass tag: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("bypass tag: read inserted id: %w", err)
+	}
+	return s.GetBypass(ctx, id)
+}
+
 func (s *SQLiteStore) GetApproval(ctx context.Context, id int64) (*Approval, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, registry, repository, tag, digest, approved_at, approved_by, reason, expires_at
@@ -299,6 +372,14 @@ SELECT id, registry, repository, tag, digest, created_at, created_by, reason, ex
 FROM freezes
 WHERE id = ?`, id)
 	return scanFreeze(row)
+}
+
+func (s *SQLiteStore) GetBypass(ctx context.Context, id int64) (*Bypass, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, registry, repository, tag, created_at, created_by, reason, expires_at
+FROM bypasses
+WHERE id = ?`, id)
+	return scanBypass(row)
 }
 
 func (s *SQLiteStore) ActiveApproval(ctx context.Context, registry, repository, tag, digest string, now time.Time) (*Approval, error) {
@@ -324,6 +405,17 @@ LIMIT 1`, registry, repository, tag, digest, unix(now))
 	return scanFreeze(row)
 }
 
+func (s *SQLiteStore) ActiveBypass(ctx context.Context, registry, repository, tag string, now time.Time) (*Bypass, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, registry, repository, tag, created_at, created_by, reason, expires_at
+FROM bypasses
+WHERE registry = ? AND repository = ? AND tag = ?
+  AND (expires_at IS NULL OR expires_at > ?)
+ORDER BY created_at DESC, id DESC
+LIMIT 1`, registry, repository, tag, unix(now))
+	return scanBypass(row)
+}
+
 func (s *SQLiteStore) LocalOverride(ctx context.Context, registry, repository, tag, digest string, now time.Time) (LocalOverride, error) {
 	freeze, err := s.ActiveFreeze(ctx, registry, repository, tag, digest, now)
 	if err != nil {
@@ -333,14 +425,214 @@ func (s *SQLiteStore) LocalOverride(ctx context.Context, registry, repository, t
 	if err != nil {
 		return LocalOverride{}, err
 	}
-	override := LocalOverride{Approval: approval, Freeze: freeze}
+	bypass, err := s.ActiveBypass(ctx, registry, repository, tag, now)
+	if err != nil {
+		return LocalOverride{}, err
+	}
+	override := LocalOverride{Approval: approval, Freeze: freeze, Bypass: bypass}
 	switch {
 	case freeze != nil:
 		override.Decision = DecisionDeny
 	case approval != nil:
 		override.Decision = DecisionAllow
+	case bypass != nil:
+		override.Decision = DecisionAllow
 	}
 	return override, nil
+}
+
+func (s *SQLiteStore) ExportState(ctx context.Context) (ExportedState, error) {
+	observations, err := s.listAllObservations(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
+	decisions, err := s.ListDecisions(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
+	approvals, err := s.listApprovals(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
+	freezes, err := s.listFreezes(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
+	bypasses, err := s.listBypasses(ctx)
+	if err != nil {
+		return ExportedState{}, err
+	}
+	return ExportedState{
+		Version:      1,
+		Observations: observations,
+		Decisions:    decisions,
+		Approvals:    approvals,
+		Freezes:      freezes,
+		Bypasses:     bypasses,
+	}, nil
+}
+
+func (s *SQLiteStore) ImportState(ctx context.Context, state ExportedState) error {
+	if state.Version != 1 {
+		return fmt.Errorf("unsupported state export version %d", state.Version)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin import state: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, obs := range state.Observations {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO tag_observations
+    (id, registry, repository, tag, digest, first_seen_at, last_seen_at, last_allowed_at, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			obs.ID, obs.Registry, obs.Repository, obs.Tag, obs.Digest, unix(obs.FirstSeenAt), unix(obs.LastSeenAt), nullableUnix(obs.LastAllowedAt), obs.Status)
+		if err != nil {
+			return fmt.Errorf("import observation %s/%s:%s@%s: %w", obs.Registry, obs.Repository, obs.Tag, obs.Digest, err)
+		}
+	}
+	for _, decision := range state.Decisions {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO pull_decisions
+    (id, timestamp, image_ref, registry, repository, tag, digest, decision, reason, client_user, request_method, request_uri)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			decision.ID, unix(decision.Timestamp), decision.ImageRef, decision.Registry, decision.Repository, decision.Tag, decision.Digest,
+			decision.Decision, decision.Reason, decision.ClientUser, decision.RequestMethod, decision.RequestURI)
+		if err != nil {
+			return fmt.Errorf("import decision for %s: %w", decision.ImageRef, err)
+		}
+	}
+	for _, approval := range state.Approvals {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO approvals
+    (id, registry, repository, tag, digest, approved_at, approved_by, reason, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			approval.ID, approval.Registry, approval.Repository, approval.Tag, approval.Digest, unix(approval.ApprovedAt), approval.ApprovedBy, approval.Reason, nullableUnix(approval.ExpiresAt))
+		if err != nil {
+			return fmt.Errorf("import approval %s/%s:%s@%s: %w", approval.Registry, approval.Repository, approval.Tag, approval.Digest, err)
+		}
+	}
+	for _, freeze := range state.Freezes {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO freezes
+    (id, registry, repository, tag, digest, created_at, created_by, reason, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			freeze.ID, freeze.Registry, freeze.Repository, freeze.Tag, nullableString(freeze.Digest), unix(freeze.CreatedAt), freeze.CreatedBy, freeze.Reason, nullableUnix(freeze.ExpiresAt))
+		if err != nil {
+			return fmt.Errorf("import freeze %s/%s:%s: %w", freeze.Registry, freeze.Repository, freeze.Tag, err)
+		}
+	}
+	for _, bypass := range state.Bypasses {
+		_, err := tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO bypasses
+    (id, registry, repository, tag, created_at, created_by, reason, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			bypass.ID, bypass.Registry, bypass.Repository, bypass.Tag, unix(bypass.CreatedAt), bypass.CreatedBy, bypass.Reason, nullableUnix(bypass.ExpiresAt))
+		if err != nil {
+			return fmt.Errorf("import bypass %s/%s:%s: %w", bypass.Registry, bypass.Repository, bypass.Tag, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit import state: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) listAllObservations(ctx context.Context) ([]Observation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, registry, repository, tag, digest, first_seen_at, last_seen_at, last_allowed_at, status
+FROM tag_observations
+ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list all observations: %w", err)
+	}
+	defer rows.Close()
+
+	var observations []Observation
+	for rows.Next() {
+		obs, err := scanObservationRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		observations = append(observations, obs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list all observations: %w", err)
+	}
+	return observations, nil
+}
+
+func (s *SQLiteStore) listApprovals(ctx context.Context) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, registry, repository, tag, digest, approved_at, approved_by, reason, expires_at
+FROM approvals
+ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list approvals: %w", err)
+	}
+	defer rows.Close()
+
+	var approvals []Approval
+	for rows.Next() {
+		approval, err := scanApprovalRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		approvals = append(approvals, approval)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list approvals: %w", err)
+	}
+	return approvals, nil
+}
+
+func (s *SQLiteStore) listFreezes(ctx context.Context) ([]Freeze, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, registry, repository, tag, digest, created_at, created_by, reason, expires_at
+FROM freezes
+ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list freezes: %w", err)
+	}
+	defer rows.Close()
+
+	var freezes []Freeze
+	for rows.Next() {
+		freeze, err := scanFreezeRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		freezes = append(freezes, freeze)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list freezes: %w", err)
+	}
+	return freezes, nil
+}
+
+func (s *SQLiteStore) listBypasses(ctx context.Context) ([]Bypass, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, registry, repository, tag, created_at, created_by, reason, expires_at
+FROM bypasses
+ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list bypasses: %w", err)
+	}
+	defer rows.Close()
+
+	var bypasses []Bypass
+	for rows.Next() {
+		bypass, err := scanBypassRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		bypasses = append(bypasses, bypass)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list bypasses: %w", err)
+	}
+	return bypasses, nil
 }
 
 func scanObservation(scanner interface {
@@ -366,6 +658,18 @@ func scanObservationRows(scanner interface {
 	return obs, nil
 }
 
+func scanDecisionRows(scanner interface {
+	Scan(dest ...any) error
+}) (DecisionRecord, error) {
+	var decision DecisionRecord
+	var timestamp int64
+	if err := scanner.Scan(&decision.ID, &timestamp, &decision.ImageRef, &decision.Registry, &decision.Repository, &decision.Tag, &decision.Digest, &decision.Decision, &decision.Reason, &decision.ClientUser, &decision.RequestMethod, &decision.RequestURI); err != nil {
+		return DecisionRecord{}, fmt.Errorf("list decisions: %w", err)
+	}
+	decision.Timestamp = time.Unix(timestamp, 0).UTC()
+	return decision, nil
+}
+
 func scanObservationValue(scanner interface {
 	Scan(dest ...any) error
 }) (Observation, error) {
@@ -387,35 +691,75 @@ func scanObservationValue(scanner interface {
 func scanApproval(scanner interface {
 	Scan(dest ...any) error
 }) (*Approval, error) {
-	var approval Approval
-	var approvedAt int64
-	var expiresAt sql.NullInt64
-	if err := scanner.Scan(&approval.ID, &approval.Registry, &approval.Repository, &approval.Tag, &approval.Digest, &approvedAt, &approval.ApprovedBy, &approval.Reason, &expiresAt); err != nil {
+	approval, err := scanApprovalValue(scanner)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get approval: %w", err)
+	}
+	return &approval, nil
+}
+
+func scanApprovalRows(scanner interface {
+	Scan(dest ...any) error
+}) (Approval, error) {
+	approval, err := scanApprovalValue(scanner)
+	if err != nil {
+		return Approval{}, fmt.Errorf("list approvals: %w", err)
+	}
+	return approval, nil
+}
+
+func scanApprovalValue(scanner interface {
+	Scan(dest ...any) error
+}) (Approval, error) {
+	var approval Approval
+	var approvedAt int64
+	var expiresAt sql.NullInt64
+	if err := scanner.Scan(&approval.ID, &approval.Registry, &approval.Repository, &approval.Tag, &approval.Digest, &approvedAt, &approval.ApprovedBy, &approval.Reason, &expiresAt); err != nil {
+		return Approval{}, err
 	}
 	approval.ApprovedAt = time.Unix(approvedAt, 0).UTC()
 	if expiresAt.Valid {
 		t := time.Unix(expiresAt.Int64, 0).UTC()
 		approval.ExpiresAt = &t
 	}
-	return &approval, nil
+	return approval, nil
 }
 
 func scanFreeze(scanner interface {
 	Scan(dest ...any) error
 }) (*Freeze, error) {
+	freeze, err := scanFreezeValue(scanner)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get freeze: %w", err)
+	}
+	return &freeze, nil
+}
+
+func scanFreezeRows(scanner interface {
+	Scan(dest ...any) error
+}) (Freeze, error) {
+	freeze, err := scanFreezeValue(scanner)
+	if err != nil {
+		return Freeze{}, fmt.Errorf("list freezes: %w", err)
+	}
+	return freeze, nil
+}
+
+func scanFreezeValue(scanner interface {
+	Scan(dest ...any) error
+}) (Freeze, error) {
 	var freeze Freeze
 	var createdAt int64
 	var digest sql.NullString
 	var expiresAt sql.NullInt64
 	if err := scanner.Scan(&freeze.ID, &freeze.Registry, &freeze.Repository, &freeze.Tag, &digest, &createdAt, &freeze.CreatedBy, &freeze.Reason, &expiresAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get freeze: %w", err)
+		return Freeze{}, err
 	}
 	freeze.Digest = digest.String
 	freeze.CreatedAt = time.Unix(createdAt, 0).UTC()
@@ -423,7 +767,47 @@ func scanFreeze(scanner interface {
 		t := time.Unix(expiresAt.Int64, 0).UTC()
 		freeze.ExpiresAt = &t
 	}
-	return &freeze, nil
+	return freeze, nil
+}
+
+func scanBypass(scanner interface {
+	Scan(dest ...any) error
+}) (*Bypass, error) {
+	bypass, err := scanBypassValue(scanner)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get bypass: %w", err)
+	}
+	return &bypass, nil
+}
+
+func scanBypassRows(scanner interface {
+	Scan(dest ...any) error
+}) (Bypass, error) {
+	bypass, err := scanBypassValue(scanner)
+	if err != nil {
+		return Bypass{}, fmt.Errorf("list bypasses: %w", err)
+	}
+	return bypass, nil
+}
+
+func scanBypassValue(scanner interface {
+	Scan(dest ...any) error
+}) (Bypass, error) {
+	var bypass Bypass
+	var createdAt int64
+	var expiresAt sql.NullInt64
+	if err := scanner.Scan(&bypass.ID, &bypass.Registry, &bypass.Repository, &bypass.Tag, &createdAt, &bypass.CreatedBy, &bypass.Reason, &expiresAt); err != nil {
+		return Bypass{}, err
+	}
+	bypass.CreatedAt = time.Unix(createdAt, 0).UTC()
+	if expiresAt.Valid {
+		t := time.Unix(expiresAt.Int64, 0).UTC()
+		bypass.ExpiresAt = &t
+	}
+	return bypass, nil
 }
 
 func requireAffected(result sql.Result, operation string) error {

@@ -49,6 +49,7 @@ type Decision struct {
 	RequiredAge    time.Duration
 	NextAllowedAt  *time.Time
 	ManualApproval bool
+	Bypassed       bool
 	Frozen         bool
 }
 
@@ -130,7 +131,8 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		}
 		decision.FirstSeenAt = &obs.FirstSeenAt
 		if override.Decision == store.DecisionAllow || result.Policy.MutableTags.AllowFirstSeenPull {
-			decision.ManualApproval = override.Decision == store.DecisionAllow
+			decision.ManualApproval = override.Approval != nil
+			decision.Bypassed = override.Bypass != nil && override.Approval == nil
 			e.allowWithVerification(ctx, result.Policy, now, obs, &decision)
 			return decision, e.record(ctx, req, decision, now)
 		}
@@ -144,7 +146,8 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 	}
 	decision.FirstSeenAt = &obs.FirstSeenAt
 	if override.Decision == store.DecisionAllow {
-		decision.ManualApproval = true
+		decision.ManualApproval = override.Approval != nil
+		decision.Bypassed = override.Bypass != nil && override.Approval == nil
 		e.allowWithVerification(ctx, result.Policy, now, obs, &decision)
 		return decision, e.record(ctx, req, decision, now)
 	}
@@ -180,7 +183,8 @@ func (e *Engine) decideDigestPinned(ctx context.Context, ref image.Reference, p 
 		return nil
 	}
 	decision.Allowed = true
-	decision.ManualApproval = override.Decision == store.DecisionAllow
+	decision.ManualApproval = override.Approval != nil
+	decision.Bypassed = override.Bypass != nil && override.Approval == nil
 	decision.Reason = "digest-pinned image allowed by policy"
 	return nil
 }
@@ -199,6 +203,10 @@ func (e *Engine) allowWithVerification(ctx context.Context, p policy.EffectivePo
 	decision.Allowed = true
 	if decision.ManualApproval {
 		decision.Reason = "digest manually approved"
+		return
+	}
+	if decision.Bypassed {
+		decision.Reason = "tag bypass active"
 		return
 	}
 	decision.Reason = "digest satisfies quarantine policy"

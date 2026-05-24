@@ -102,6 +102,29 @@ func TestManualApprovalAllowsBeforeAgeThreshold(t *testing.T) {
 	}
 }
 
+func TestBypassAllowsBeforeAgeThreshold(t *testing.T) {
+	firstSeen := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	engine, db, _ := newTestEngine(t, "sha256:first", firstSeen.Add(time.Hour), false)
+	if _, err := db.CreateObservation(context.Background(), "example.test", "example/app", "latest", "sha256:first", firstSeen); err != nil {
+		t.Fatalf("CreateObservation() error = %v", err)
+	}
+	expiresAt := firstSeen.Add(2 * time.Hour)
+	if _, err := db.BypassTag(context.Background(), "example.test", "example/app", "latest", firstSeen.Add(time.Minute), "alice", "incident", &expiresAt); err != nil {
+		t.Fatalf("BypassTag() error = %v", err)
+	}
+
+	decision, err := engine.Decide(context.Background(), Request{ImageRef: "example.test/example/app:latest"})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if !decision.Allowed || !decision.Bypassed || decision.ManualApproval {
+		t.Fatalf("decision = %#v, want bypass allow", decision)
+	}
+	if decision.Reason != "tag bypass active" {
+		t.Fatalf("reason = %q, want bypass reason", decision.Reason)
+	}
+}
+
 func TestFreezeDeniesEvenApprovedDigest(t *testing.T) {
 	firstSeen := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
 	engine, db, _ := newTestEngine(t, "sha256:first", firstSeen.Add(8*24*time.Hour), false)

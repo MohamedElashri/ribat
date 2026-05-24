@@ -133,6 +133,44 @@ func TestFreezeOverridesApproval(t *testing.T) {
 	}
 }
 
+func TestBypassExpiresAndFreezeOverridesIt(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t)
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Hour)
+
+	if _, err := db.BypassTag(ctx, "docker.io", "library/nginx", "latest", now, "alice", "incident", &expiresAt); err != nil {
+		t.Fatalf("BypassTag() error = %v", err)
+	}
+	active, err := db.ActiveBypass(ctx, "docker.io", "library/nginx", "latest", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveBypass(active) error = %v", err)
+	}
+	if active == nil {
+		t.Fatal("ActiveBypass(active) = nil, want bypass")
+	}
+	expired, err := db.ActiveBypass(ctx, "docker.io", "library/nginx", "latest", now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("ActiveBypass(expired) error = %v", err)
+	}
+	if expired != nil {
+		t.Fatalf("ActiveBypass(expired) = %#v, want nil", expired)
+	}
+	if _, err := db.FreezeTag(ctx, "docker.io", "library/nginx", "latest", "", now.Add(2*time.Minute), "bob", "compromise", nil); err != nil {
+		t.Fatalf("FreezeTag() error = %v", err)
+	}
+	override, err := db.LocalOverride(ctx, "docker.io", "library/nginx", "latest", "sha256:first", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("LocalOverride() error = %v", err)
+	}
+	if override.Bypass == nil || override.Freeze == nil {
+		t.Fatalf("LocalOverride() = %#v, want bypass and freeze", override)
+	}
+	if override.Decision != DecisionDeny {
+		t.Fatalf("LocalOverride decision = %q, want %q", override.Decision, DecisionDeny)
+	}
+}
+
 func TestRecordDecision(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t)
@@ -158,6 +196,43 @@ func TestRecordDecision(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("decision count = %d, want 1", count)
+	}
+}
+
+func TestExportImportPreservesObservationsAndApprovals(t *testing.T) {
+	ctx := context.Background()
+	source := newTestStore(t)
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+
+	if _, err := source.CreateObservation(ctx, "docker.io", "library/nginx", "latest", "sha256:first", now); err != nil {
+		t.Fatalf("CreateObservation() error = %v", err)
+	}
+	if _, err := source.ApproveDigest(ctx, "docker.io", "library/nginx", "latest", "sha256:first", now, "alice", "reviewed", &expiresAt); err != nil {
+		t.Fatalf("ApproveDigest() error = %v", err)
+	}
+	exported, err := source.ExportState(ctx)
+	if err != nil {
+		t.Fatalf("ExportState() error = %v", err)
+	}
+
+	target := newTestStore(t)
+	if err := target.ImportState(ctx, exported); err != nil {
+		t.Fatalf("ImportState() error = %v", err)
+	}
+	obs, err := target.GetObservation(ctx, "docker.io", "library/nginx", "latest", "sha256:first")
+	if err != nil {
+		t.Fatalf("GetObservation() error = %v", err)
+	}
+	if obs == nil {
+		t.Fatal("imported observation = nil, want observation")
+	}
+	approval, err := target.ActiveApproval(ctx, "docker.io", "library/nginx", "latest", "sha256:first", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveApproval() error = %v", err)
+	}
+	if approval == nil || approval.Reason != "reviewed" {
+		t.Fatalf("imported approval = %#v, want reviewed approval", approval)
 	}
 }
 
