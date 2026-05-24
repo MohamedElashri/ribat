@@ -1,0 +1,26 @@
+[Unit]
+Description=Ribat Docker authorization plugin
+Documentation=https://github.com/MohamedElashri/ribat
+Wants=network-online.target
+After=network-online.target
+Before=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -m 0755 /run/docker/plugins
+ExecStart=/usr/local/bin/ribat authz --config /etc/ribat/config.yaml --socket /run/docker/plugins/ribat.sock
+Restart=on-failure
+RestartSec=2s
+StateDirectory=ribat
+StateDirectoryMode=0750
+LogsDirectory=ribat
+LogsDirectoryMode=0750
+ConfigurationDirectory=ribat
+ConfigurationDirectoryMode=0755
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
