@@ -7,6 +7,7 @@ The initial implementation is a Go command-line application. Future phases will 
 ## Usage
 ```bash
 go run ./cmd/ribat version
+go run ./cmd/ribat inspect docker.io/library/alpine:latest
 go test ./...
 ```
 
