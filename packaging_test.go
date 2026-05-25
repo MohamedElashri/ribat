@@ -121,12 +121,15 @@ func TestMakefileInstallsPackagingArtifacts(t *testing.T) {
 		"release-snapshot:",
 		"test-integration:",
 		"test-docker-live:",
+		"test-host-authz-live:",
 		"docs-build:",
 		"docs-serve:",
 		"github.com/MohamedElashri/nida/cmd/nida@main",
 		"RIBAT_INTEGRATION_TESTS=1",
 		"RIBAT_DOCKER_LIVE_TESTS=1",
 		"scripts/live-docker-validation.sh",
+		"RIBAT_HOST_LIVE_TESTS=1",
+		"scripts/live-host-authz-validation.sh",
 		"ribat_$(VERSION)_",
 		"SOURCE_DATE_EPOCH",
 		"checksums.txt",
@@ -288,6 +291,8 @@ func TestLiveDockerValidationScriptIsOptIn(t *testing.T) {
 	body := readFile(t, "scripts/live-docker-validation.sh")
 	for _, want := range []string{
 		"RIBAT_DOCKER_LIVE_TESTS",
+		"RIBAT_VALIDATE_GHCR",
+		"RIBAT_VALIDATE_COSIGN",
 		"RIBAT_VALIDATE_INSTALLED_AUTHZ",
 		"docker pull",
 		"proxy --config",
@@ -307,6 +312,27 @@ func TestLiveDockerValidationScriptIsOptIn(t *testing.T) {
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("live Docker validation script should not manage Docker daemon configuration; found %q", forbidden)
+		}
+	}
+}
+
+func TestLiveHostAuthZValidationScriptIsOptInAndRestoresDocker(t *testing.T) {
+	body := readFile(t, "scripts/live-host-authz-validation.sh")
+	for _, want := range []string{
+		"RIBAT_HOST_LIVE_TESTS",
+		"RIBAT_HOST_LIVE_MUTATE_DOCKER",
+		"RIBAT_HOST_INSTALL_MODE",
+		"authorization-plugins",
+		"systemctl restart docker",
+		"systemctl enable --now ribat.service",
+		"Plugin.Activate",
+		"docker pull",
+		"approve --config",
+		"restore_file",
+		"journalctl -u ribat.service",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("live host AuthZ validation script missing %q", want)
 		}
 	}
 }

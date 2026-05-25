@@ -18,7 +18,7 @@ LDFLAGS := -s -w -buildid= -X github.com/MohamedElashri/ribat/internal/version.V
 RELEASE_TARGETS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 DOCS_GO_ENV ?= GOCACHE=$(CURDIR)/.gocache
 
-.PHONY: build test test-integration test-docker-live docs-build docs-serve release-snapshot install install-docker-dropin uninstall clean
+.PHONY: build test test-integration test-docker-live test-host-authz-live docs-build docs-serve release-snapshot install install-docker-dropin uninstall clean
 
 build:
 	$(GO) build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/ribat
@@ -31,6 +31,9 @@ test-integration:
 
 test-docker-live: build
 	RIBAT_DOCKER_LIVE_TESTS=1 RIBAT_BIN=./$(BINARY) scripts/live-docker-validation.sh
+
+test-host-authz-live:
+	RIBAT_HOST_LIVE_TESTS=1 scripts/live-host-authz-validation.sh
 
 docs-build:
 	@if [ -d ../nida ]; then \
