@@ -102,8 +102,20 @@ Download the release archive and checksum file from GitHub Releases.
 
 Example for `Linux x86_64`:
 
+Decide on the release tag to install, such as `v0.1.0`:
 ```bash
 TAG=v0.1.0
+```
+
+or resolve the latest release tag:
+
+```bash
+TAG=$(curl -fsSL https://api.github.com/repos/MohamedElashri/ribat/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -n 1)
+```
+
+Then download, verify, and install:
+
+```bash
 ARCHIVE="ribat_${TAG}_linux_amd64.tar.gz"
 curl -fL -o "$ARCHIVE" "https://github.com/MohamedElashri/ribat/releases/download/${TAG}/${ARCHIVE}"
 curl -fsSL -o checksums.txt "https://github.com/MohamedElashri/ribat/releases/download/${TAG}/checksums.txt"
