@@ -100,7 +100,7 @@ Use the system-wide install when the binary will be launched by the systemd serv
 
 Download the release archive and checksum file from GitHub Releases.
 
-Example for Linux x86_64:
+Example for `Linux x86_64`:
 
 ```bash
 TAG=v0.1.0
