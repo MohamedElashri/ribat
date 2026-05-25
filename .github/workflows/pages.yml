@@ -31,29 +31,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # sanad: ref=v6.0.2
 
       - name: Check out Nida
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # sanad: ref=v6.0.2
         with:
           repository: MohamedElashri/nida
           path: .docs-tools/nida
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # sanad: ref=v6.4.0
         with:
           go-version-file: .docs-tools/nida/go.mod
           cache: true
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # sanad: ref=v6.0.0
 
       - name: Build documentation site
         working-directory: .docs-tools/nida
         run: go run ./cmd/nida build --site "$GITHUB_WORKSPACE/docs"
 
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # sanad: ref=v5.0.0
         with:
           path: docs/public
 
@@ -66,4 +66,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # sanad: ref=v5.0.0
