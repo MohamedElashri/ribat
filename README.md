@@ -40,6 +40,8 @@ go test ./...
 
 Full documentation is published at [docs](https://melashri.net/ribat/)
 
+Release notes are maintained in [CHANGELOG.md](CHANGELOG.md).
+
 The source for the docs site lives under `docs/` and is built with [Nida](https://github.com/MohamedElashri/nida):
 
 ```bash
