@@ -84,6 +84,15 @@ func TestLocalRegistryProxyIntegration(t *testing.T) {
 		t.Fatalf("proxied manifest body mismatch:\n%s", allowed.Body)
 	}
 
+	digestPath := strings.Replace(localManifestDigest, ":", "-", 1)
+	allowedByDigestPath := proxyGet(t, proxyHandler, "/v2/local.registry/example/app/manifests/"+digestPath)
+	if allowedByDigestPath.StatusCode != http.StatusOK {
+		t.Fatalf("digest path manifest status = %d, want 200; body: %s", allowedByDigestPath.StatusCode, allowedByDigestPath.Body)
+	}
+	if got := allowedByDigestPath.Header.Get("Docker-Content-Digest"); got != localManifestDigest {
+		t.Fatalf("digest path Docker-Content-Digest = %q, want %q", got, localManifestDigest)
+	}
+
 	allowedBlob := proxyGet(t, proxyHandler, "/v2/local.registry/example/app/blobs/"+localLayerDigest)
 	if allowedBlob.StatusCode != http.StatusOK {
 		t.Fatalf("blob after allowed manifest status = %d, want 200; body: %s", allowedBlob.StatusCode, allowedBlob.Body)
@@ -96,8 +105,8 @@ func TestLocalRegistryProxyIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountDecisions error = %v", err)
 	}
-	if decisions != 2 {
-		t.Fatalf("decision count = %d, want 2", decisions)
+	if decisions != 3 {
+		t.Fatalf("decision count = %d, want 3", decisions)
 	}
 	auditBody, err := os.ReadFile(auditPath)
 	if err != nil {
@@ -108,6 +117,7 @@ func TestLocalRegistryProxyIntegration(t *testing.T) {
 		`"decision":"allow"`,
 		localManifestDigest,
 		`"request_uri":"/v2/local.registry/example/app/manifests/latest"`,
+		`"request_uri":"/v2/local.registry/example/app/manifests/` + digestPath + `"`,
 	} {
 		if !strings.Contains(string(auditBody), want) {
 			t.Fatalf("audit log missing %q:\n%s", want, string(auditBody))

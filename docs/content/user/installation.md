@@ -61,7 +61,7 @@ curl -fsSL https://melashri.net/ribat/install.sh | sh
 The installer:
 
 * detects your OS and CPU architecture;
-* resolves the latest GitHub release unless `RIBAT_VERSION` is set;
+* resolves the latest public GitHub release unless `RIBAT_VERSION` is set;
 * downloads the matching release archive;
 * verifies the archive against `checksums.txt`;
 * installs `ribat` into `$HOME/.local/bin` by default.

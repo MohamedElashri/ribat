@@ -99,9 +99,14 @@ if [[ "${DENIED_CODE}" -eq 0 ]]; then
   echo "expected first proxy pull to be denied, but it succeeded" >&2
   exit 1
 fi
-if [[ "${DENIED_OUTPUT}" != *"new digest observed"* && "${DENIED_OUTPUT}" != *"digest entered quarantine"* ]]; then
+if [[ "${DENIED_OUTPUT}" != *"new digest observed"* && "${DENIED_OUTPUT}" != *"digest entered quarantine"* && "${DENIED_OUTPUT}" != *"403 Forbidden"* ]]; then
   echo "first proxy pull failed without the expected Ribat quarantine reason:" >&2
   echo "${DENIED_OUTPUT}" >&2
+  exit 1
+fi
+if ! grep -q '"decision":"deny"' "${AUDIT_PATH}"; then
+  echo "first proxy pull did not write a Ribat deny decision:" >&2
+  cat "${AUDIT_PATH}" >&2
   exit 1
 fi
 

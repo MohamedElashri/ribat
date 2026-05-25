@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	testManifestDigest = "sha256:manifest"
-	testConfigDigest   = "sha256:config"
-	testLayerDigest    = "sha256:layer"
+	testManifestDigest      = "sha256:manifest"
+	testChildManifestDigest = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	testConfigDigest        = "sha256:config"
+	testLayerDigest         = "sha256:layer"
 )
 
 func TestFreshDigestManifestRequestReturnsForbidden(t *testing.T) {
@@ -67,6 +68,26 @@ func TestMatureDigestManifestRequestProxiesManifest(t *testing.T) {
 	}
 	if got := rec.Header().Get("Docker-Content-Digest"); got != testManifestDigest {
 		t.Fatalf("Docker-Content-Digest = %q, want %q", got, testManifestDigest)
+	}
+	if !strings.Contains(rec.Body.String(), testLayerDigest) {
+		t.Fatalf("body = %q, want proxied manifest", rec.Body.String())
+	}
+}
+
+func TestDigestPathManifestRequestNormalizesToDigestPinnedImage(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)
+	handler, _ := newProxyTestHandler(t, now)
+
+	pathDigest := strings.Replace(testChildManifestDigest, ":", "-", 1)
+	req := httptest.NewRequest(http.MethodGet, "/v2/example.test/example/app/manifests/"+pathDigest, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Docker-Content-Digest"); got != testChildManifestDigest {
+		t.Fatalf("Docker-Content-Digest = %q, want %q", got, testChildManifestDigest)
 	}
 	if !strings.Contains(rec.Body.String(), testLayerDigest) {
 		t.Fatalf("body = %q, want proxied manifest", rec.Body.String())
@@ -129,6 +150,13 @@ func newProxyTestHandler(t *testing.T, now time.Time) (http.Handler, *store.SQLi
 				return proxyResponse(http.StatusOK, headers, `{"schemaVersion":2,"mediaType":"`+registry.MediaTypeOCIManifest+`","config":{"digest":"`+testConfigDigest+`"},"layers":[{"digest":"`+testLayerDigest+`"}]}`)
 			}
 			return proxyResponse(http.StatusOK, headers, "")
+		case "/v2/example/app/manifests/" + testChildManifestDigest:
+			if r.Method != http.MethodGet {
+				t.Fatalf("child manifest method = %s, want GET", r.Method)
+			}
+			headers["Docker-Content-Digest"] = testChildManifestDigest
+			headers["Content-Type"] = registry.MediaTypeOCIManifest
+			return proxyResponse(http.StatusOK, headers, `{"schemaVersion":2,"mediaType":"`+registry.MediaTypeOCIManifest+`","config":{"digest":"`+testConfigDigest+`"},"layers":[{"digest":"`+testLayerDigest+`"}]}`)
 		case "/v2/example/app/blobs/" + testLayerDigest:
 			headers["Docker-Content-Digest"] = testLayerDigest
 			headers["Content-Type"] = "application/octet-stream"

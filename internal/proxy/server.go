@@ -87,7 +87,8 @@ func (s *Server) handleV2(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request, req proxyRequest) {
-	imageRef := proxyImageRef(req.registry, req.repository, req.reference)
+	reference := normalizeManifestReference(req.reference)
+	imageRef := proxyImageRef(req.registry, req.repository, reference)
 	decision, err := s.Engine.Decide(r.Context(), quarantine.Request{
 		ImageRef:      imageRef,
 		RequestMethod: r.Method,
@@ -107,7 +108,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request, req prox
 		http.Error(w, "invalid upstream image reference: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fetched, err := s.resolver().FetchManifest(r.Context(), ref, req.reference)
+	fetched, err := s.resolver().FetchManifest(r.Context(), ref, reference)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -294,6 +295,23 @@ func proxyImageRef(registryName, repository, reference string) string {
 		return registryName + "/" + repository + "@" + reference
 	}
 	return registryName + "/" + repository + ":" + reference
+}
+
+func normalizeManifestReference(reference string) string {
+	const (
+		sha256PathPrefix = "sha256-"
+		sha256HexLength  = 64
+	)
+	if len(reference) != len(sha256PathPrefix)+sha256HexLength || !strings.HasPrefix(reference, sha256PathPrefix) {
+		return reference
+	}
+	hexPart := strings.TrimPrefix(reference, sha256PathPrefix)
+	for _, r := range hexPart {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return reference
+		}
+	}
+	return "sha256:" + hexPart
 }
 
 func proxyDecisionMessage(decision quarantine.Decision) string {

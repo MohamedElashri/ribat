@@ -38,7 +38,7 @@ go test ./...
 
 ## Documentation
 
-Full documentation is published at <https://melashri.net/ribat/>.
+Full documentation is published at [docs](https://melashri.net/ribat/)
 
 The source for the docs site lives under `docs/` and is built with [Nida](https://github.com/MohamedElashri/nida):
 
