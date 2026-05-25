@@ -61,4 +61,4 @@ where `TAG` includes the leading `v`, such as `v0.1.0`.
 
 ## GitHub Pages
 
-Documentation is published separately by `.github/workflows/pages.yml` when docs, templates, static assets, source, or workflow files change on `main`.
+Documentation is published separately by `.github/workflows/pages.yml` when `docs/**` or the Pages workflow itself changes on `main`. Source-only, config-only, script-only, and README-only changes do not trigger Pages.

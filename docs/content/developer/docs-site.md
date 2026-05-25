@@ -46,4 +46,6 @@ go run github.com/MohamedElashri/nida/cmd/nida@main build --site ./docs
 
 `.github/workflows/pages.yml` checks out Ribat, checks out `MohamedElashri/nida` into `.docs-tools/nida`, builds this site with Nida, uploads `docs/public`, and deploys it to GitHub Pages.
 
+The workflow is intentionally path-filtered. It runs on pushes to `main` only when `docs/**` or `.github/workflows/pages.yml` changes, plus manual `workflow_dispatch` runs. Changes to `cmd/**`, `internal/**`, `configs/**`, `scripts/**`, `README.md`, or `Makefile` should not spend Pages minutes unless they also change docs.
+
 This keeps Ribat's repository free of generated HTML while still using the same static-site generator and templates as Nida's own docs.

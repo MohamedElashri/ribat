@@ -246,6 +246,8 @@ func TestNidaDocsSiteShape(t *testing.T) {
 func TestPagesWorkflowBuildsNidaDocs(t *testing.T) {
 	body := readFile(t, ".github/workflows/pages.yml")
 	for _, want := range []string{
+		`- "docs/**"`,
+		`- ".github/workflows/pages.yml"`,
 		"repository: MohamedElashri/nida",
 		"path: .docs-tools/nida",
 		"go-version-file: .docs-tools/nida/go.mod",
@@ -257,6 +259,20 @@ func TestPagesWorkflowBuildsNidaDocs(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("pages workflow missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		`- "README.md"`,
+		`- "cmd/**"`,
+		`- "internal/**"`,
+		`- "configs/**"`,
+		`- "scripts/**"`,
+		`- "Makefile"`,
+		`- "go.mod"`,
+		`- "go.sum"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("pages workflow should not run for non-doc path %q", forbidden)
 		}
 	}
 }
