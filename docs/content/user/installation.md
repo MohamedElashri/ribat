@@ -10,7 +10,7 @@ Ribat has two installation layers:
 1. install the `ribat` binary;
 2. configure the host service and Docker authorization plugin when you want Ribat to guard Docker Engine pulls.
 
-Use the release installer for normal binary installation. Use the source build when developing Ribat or when you want to install the systemd packaging directly from a checkout.
+Use the release installer for normal binary installation and Linux system service installation. Use the source build when developing Ribat or testing unreleased packaging changes.
 
 ## Privileges
 
@@ -23,7 +23,7 @@ Use this split in practice:
 | Goal | Root required? | Recommended path |
 | --- | --- | --- |
 | Try `ribat inspect`, `ribat policy check`, or local `decide` commands | no | `curl -fsSL https://melashri.net/ribat/install.sh \| sh` |
-| Install the binary for all users | yes, unless `/usr/local/bin` is writable | `curl -fsSL https://melashri.net/ribat/install.sh \| RIBAT_INSTALL_SYSTEM=1 sh` |
+| Install the binary, default config, state/log directories, and systemd unit | yes | `curl -fsSL https://melashri.net/ribat/install.sh \| RIBAT_INSTALL_SYSTEM=1 sh` |
 | Enable Docker AuthZ enforcement | yes | install system files, enable `ribat.service`, update `/etc/docker/daemon.json`, restart Docker |
 
 Do not run the whole installer as root unless you intentionally want a root-owned install. Prefer `RIBAT_INSTALL_SYSTEM=1`; the script uses `sudo` only for the final copy when needed.
@@ -78,7 +78,8 @@ ribat version
 | --- | --- | --- |
 | `RIBAT_VERSION` | `latest` | Release tag to install. Accepts `v0.1.0` or `0.1.0`. |
 | `RIBAT_INSTALL_DIR` | `$XDG_BIN_HOME`, then `$HOME/.local/bin` | Destination directory for user installs. |
-| `RIBAT_INSTALL_SYSTEM` | `0` | Set to `1` or `true` to install into `/usr/local/bin`, using `sudo` when needed. |
+| `RIBAT_INSTALL_SYSTEM` | `0` | Set to `1` or `true` to install into `/usr/local/bin` and install Linux system config/service files, using `sudo` when needed. |
+| `RIBAT_INSTALL_DOCKER_DROPIN` | `0` | Set to `1` or `true` with `RIBAT_INSTALL_SYSTEM=1` to also install `/etc/systemd/system/docker.service.d/10-ribat.conf`. |
 
 Examples:
 
@@ -95,6 +96,17 @@ curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_SYSTEM=1 sh
 ```
 
 Use the system-wide install when the binary will be launched by the systemd service at `/usr/local/bin/ribat`.
+
+On Linux, `RIBAT_INSTALL_SYSTEM=1` also installs:
+
+```text
+/etc/ribat/config.yaml
+/var/lib/ribat/
+/var/log/ribat/
+/etc/systemd/system/ribat.service
+```
+
+The installer does not enable services, edit Docker daemon configuration, or restart Docker.
 
 ## Manual Archive Install
 
@@ -180,23 +192,21 @@ AuthZ mode is the host enforcement path and should be configured as root.
 
 ### 1. Install The Service Files
 
-If you are installing from a source checkout, run:
+From a release, install the binary and host service files:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_SYSTEM=1 sh
+```
+
+This installs the binary, default config, state/log directories, and `ribat.service` without requiring a source checkout.
+
+If you are installing from a source checkout instead, run:
 
 ```bash
 sudo make install
 ```
 
-This installs the binary, default config, state/log directories, and `ribat.service`.
-
-If you installed only the prebuilt binary with `install.sh`, you still need the service unit and config files from this repository before enabling AuthZ mode. Until release archives include packaging files, use a checkout for host service installation:
-
-```bash
-git clone https://github.com/MohamedElashri/ribat.git
-cd ribat
-sudo make install
-```
-
-`make install` keeps an existing `/etc/ribat/config.yaml` in place.
+Both install paths keep an existing `/etc/ribat/config.yaml` in place.
 
 ### 2. Review Policy
 
@@ -237,10 +247,23 @@ Merge this setting into `/etc/docker/daemon.json`:
 
 An example file is available at `packaging/docker/daemon-ribat.json`. If your Docker daemon already has a `daemon.json`, merge the `authorization-plugins` key instead of replacing the whole file.
 
-Install the optional Docker systemd drop-in so Docker starts after Ribat:
+Install the optional Docker systemd drop-in so Docker starts after Ribat.
+
+From the release installer:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_SYSTEM=1 RIBAT_INSTALL_DOCKER_DROPIN=1 sh
+```
+
+From a source checkout:
 
 ```bash
 sudo make install-docker-dropin
+```
+
+Then reload systemd and restart Docker:
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```
