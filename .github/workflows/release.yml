@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build versioned binaries
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          fi
+          commit="$(git rev-parse --short=12 HEAD)"
+          source_epoch="$(git log -1 --format=%ct)"
+          build_date="$(date -u -d "@${source_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            binary="ribat"
+            if [ "$os" = "windows" ]; then
+              binary="ribat.exe"
+            fi
+            package="ribat_${version}_${os}_${arch}"
+            workdir="dist/${package}"
+            mkdir -p "$workdir"
+            GOOS="$os" GOARCH="$arch" go build \
+              -trimpath \
+              -buildvcs=false \
+              -ldflags="-s -w -buildid= -X github.com/MohamedElashri/ribat/internal/version.Version=${version} -X github.com/MohamedElashri/ribat/internal/version.Commit=${commit} -X github.com/MohamedElashri/ribat/internal/version.Date=${build_date}" \
+              -o "${workdir}/${binary}" \
+              ./cmd/ribat
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${source_epoch}" -czf "dist/${package}.tar.gz" -C "$workdir" "$binary"
+            rm -rf "$workdir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          fi
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" dist/* --clobber
+          else
+            gh release create "$version" dist/* --title "$version" --generate-notes
+          fi

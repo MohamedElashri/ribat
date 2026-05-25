@@ -2,6 +2,8 @@
 
 This guide installs Ribat as a systemd service that exposes a Docker authorization plugin socket at `/run/docker/plugins/ribat.sock`.
 
+Download a versioned release tarball for your platform, or build from source with `make build`. Release tarballs are named like `ribat_v0.1.0_linux_amd64.tar.gz` and are published with `checksums.txt`.
+
 ## Paths
 
 Ribat uses these host paths by convention:
@@ -55,6 +57,22 @@ sudo systemctl restart docker
 
 After Docker restarts, first-seen mutable-tag pulls should be denied and recorded according to `/etc/ribat/config.yaml`.
 
+## Verify
+
+Check the installed binary version:
+
+```bash
+ribat version
+```
+
+Run a dry decision:
+
+```bash
+sudo ribat decide --config /etc/ribat/config.yaml docker.io/library/alpine:latest
+```
+
+The first decision for a new mutable-tag digest should usually be `DENY` with a reason that says the digest entered quarantine.
+
 ## Disable
 
 To disable Ribat without deleting state:
@@ -102,3 +120,7 @@ The rollback leaves `/var/lib/ribat/state.db` and `/var/log/ribat/audit.jsonl` i
 ```bash
 sudo make uninstall
 ```
+
+## Troubleshooting
+
+See `docs/troubleshooting.md` for plugin socket checks, unexpected denial triage, Cosign verification failures, proxy pull format, and the conservative `docker build --pull` behavior.

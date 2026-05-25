@@ -1,0 +1,33 @@
+version: 1
+
+default_policy:
+  mutable_tags:
+    action: quarantine
+    min_digest_age: 14d
+    allow_first_seen_pull: false
+
+  digest_pinned_images:
+    action: allow
+
+  failed_registry_resolution:
+    action: deny
+
+  failed_signature_check:
+    action: deny
+
+  signatures:
+    cosign:
+      required: false
+
+rules:
+  - match: "*"
+    mutable_tags:
+      min_digest_age: 14d
+      allow_first_seen_pull: false
+
+audit:
+  path: "/var/log/ribat/audit.jsonl"
+
+state:
+  backend: sqlite
+  path: "/var/lib/ribat/state.db"

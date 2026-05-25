@@ -1,0 +1,39 @@
+version: 1
+
+default_policy:
+  mutable_tags:
+    action: quarantine
+    min_digest_age: 7d
+    allow_first_seen_pull: false
+
+  digest_pinned_images:
+    action: allow
+
+  failed_registry_resolution:
+    action: deny
+
+  failed_signature_check:
+    action: deny
+
+  signatures:
+    cosign:
+      required: false
+
+rules:
+  - match: "ghcr.io/example/app:*"
+    mutable_tags:
+      min_digest_age: 7d
+      allow_first_seen_pull: false
+    signatures:
+      cosign:
+        required: true
+        mode: keyless
+        issuer: "https://token.actions.githubusercontent.com"
+        identity_regex: "^https://github.com/example/app/.github/workflows/release.yml@refs/tags/v.*$"
+
+audit:
+  path: "/var/log/ribat/audit.jsonl"
+
+state:
+  backend: sqlite
+  path: "/var/lib/ribat/state.db"
