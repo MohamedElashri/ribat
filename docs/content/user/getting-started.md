@@ -23,19 +23,48 @@ registry + repository + tag + digest
 
 Then it denies the pull unless policy explicitly allows first-seen pulls. Once the digest has aged for the configured minimum age, and any required verification passes, Ribat allows it.
 
-## Try Local Commands
+## Install The Binary
 
-From a source checkout:
+Install the latest prebuilt release on Linux or macOS:
 
 ```bash
-go run ./cmd/ribat version
-go run ./cmd/ribat inspect docker.io/library/alpine:latest
-go run ./cmd/ribat decide --config configs/ribat.example.yaml docker.io/library/alpine:latest
+curl -fsSL https://melashri.net/ribat/install.sh | sh
+```
+
+For a system-wide install:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_SYSTEM=1 sh
+```
+
+Use the default user-local install for CLI experiments. Use `RIBAT_INSTALL_SYSTEM=1` when the binary should be available to the systemd service for Docker AuthZ enforcement.
+
+To install a specific version:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_VERSION=v0.1.0 sh
+```
+
+After installation:
+
+```bash
+ribat version
+```
+
+## Try Local Commands
+
+With a source checkout, or after installing the binary and pointing `--config` at a policy file:
+
+```bash
+ribat inspect docker.io/library/alpine:latest
+ribat decide --config configs/ribat.example.yaml docker.io/library/alpine:latest
 ```
 
 `inspect` resolves a tag and prints the remote digest without updating quarantine state. `decide` runs the policy engine and writes state and audit events.
 
 ## Install On A Docker Host
+
+Docker host enforcement requires root because it installs systemd files, writes `/etc/ribat`, creates state and log directories, exposes `/run/docker/plugins/ribat.sock`, and requires Docker daemon configuration.
 
 For normal hosts, install Ribat as a Docker authorization plugin:
 

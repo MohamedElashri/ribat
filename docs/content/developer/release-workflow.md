@@ -51,6 +51,14 @@ RIBAT_VALIDATE_INSTALLED_AUTHZ=1 make test-docker-live
 
 The workflow writes `checksums.txt` and publishes the files to a GitHub Release.
 
+The public installer at `https://melashri.net/ribat/install.sh` downloads these archives and verifies them against `checksums.txt`. Keep archive naming compatible with:
+
+```text
+ribat_${TAG}_${os}_${arch}.tar.gz
+```
+
+where `TAG` includes the leading `v`, such as `v0.1.0`.
+
 ## GitHub Pages
 
 Documentation is published separately by `.github/workflows/pages.yml` when docs, templates, static assets, source, or workflow files change on `main`.

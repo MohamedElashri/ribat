@@ -53,6 +53,15 @@ func TestDockerDaemonExampleEnablesRibatAuthz(t *testing.T) {
 func TestInstallDocsCoverOperationsAndRollback(t *testing.T) {
 	body := readFile(t, "docs/content/user/installation.md")
 	for _, want := range []string{
+		"curl -fsSL https://melashri.net/ribat/install.sh | sh",
+		"RIBAT_VERSION",
+		"RIBAT_INSTALL_DIR",
+		"RIBAT_INSTALL_SYSTEM",
+		"## Privileges",
+		"Docker enforcement does need root privileges",
+		"Do not run the whole installer as root",
+		"Manual Archive Install",
+		"Build From Source",
 		"/etc/ribat/config.yaml",
 		"/var/lib/ribat/state.db",
 		"/var/log/ribat/audit.jsonl",
@@ -66,6 +75,27 @@ func TestInstallDocsCoverOperationsAndRollback(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("docs/content/user/installation.md missing %q", want)
+		}
+	}
+}
+
+func TestInstallScriptDownloadsReleaseArchive(t *testing.T) {
+	body := readFile(t, "docs/static/install.sh")
+	for _, want := range []string{
+		`repo="MohamedElashri/ribat"`,
+		"RIBAT_VERSION",
+		"RIBAT_INSTALL_DIR",
+		"RIBAT_INSTALL_SYSTEM",
+		"releases/latest",
+		`archive="ribat_${tag}_${os}_${arch}.tar.gz"`,
+		"checksums.txt",
+		"sha256sum -c",
+		"shasum -a 256",
+		`install -m 0755 "$tmp/extract/ribat" "$install_dir/ribat"`,
+		`"$install_dir/ribat" version`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("docs/static/install.sh missing %q", want)
 		}
 	}
 }
@@ -201,6 +231,7 @@ func TestNidaDocsSiteShape(t *testing.T) {
 		"docs/templates/partials/nav.html",
 		"docs/static/style.css",
 		"docs/static/favicon.svg",
+		"docs/static/install.sh",
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected Nida docs site file %s: %v", path, err)

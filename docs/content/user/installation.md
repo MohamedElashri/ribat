@@ -1,15 +1,155 @@
 +++
 title = "Installation"
-description = "Install Ribat as a systemd service and Docker authorization plugin."
+description = "Install Ribat from prebuilt releases or source, then enable Docker authorization plugin mode."
 weight = 20
 template = "page"
 +++
 
-Ribat installs as a systemd service that exposes a Docker authorization plugin socket at `/run/docker/plugins/ribat.sock`.
+Ribat has two installation layers:
 
-Download a versioned release tarball for your platform, or build from source with `make build`. Release tarballs are named like `ribat_v0.1.0_linux_amd64.tar.gz` and are published with `checksums.txt`.
+1. install the `ribat` binary;
+2. configure the host service and Docker authorization plugin when you want Ribat to guard Docker Engine pulls.
 
-## Paths
+Use the release installer for normal binary installation. Use the source build when developing Ribat or when you want to install the systemd packaging directly from a checkout.
+
+## Privileges
+
+Binary installation does not need root when you install into a user directory such as `$HOME/.local/bin`.
+
+Docker enforcement does need root privileges. AuthZ mode uses system paths such as `/usr/local/bin`, `/etc/ribat`, `/var/lib/ribat`, `/var/log/ribat`, and `/run/docker/plugins/ribat.sock`, and enabling it requires editing Docker daemon configuration and restarting Docker.
+
+Use this split in practice:
+
+| Goal | Root required? | Recommended path |
+| --- | --- | --- |
+| Try `ribat inspect`, `ribat policy check`, or local `decide` commands | no | `curl -fsSL https://melashri.net/ribat/install.sh \| sh` |
+| Install the binary for all users | yes, unless `/usr/local/bin` is writable | `curl -fsSL https://melashri.net/ribat/install.sh \| RIBAT_INSTALL_SYSTEM=1 sh` |
+| Enable Docker AuthZ enforcement | yes | install system files, enable `ribat.service`, update `/etc/docker/daemon.json`, restart Docker |
+
+Do not run the whole installer as root unless you intentionally want a root-owned install. Prefer `RIBAT_INSTALL_SYSTEM=1`; the script uses `sudo` only for the final copy when needed.
+
+## Supported Platforms
+
+Release archives are published for:
+
+| OS | Architectures |
+| --- | --- |
+| Linux | `amd64`, `arm64` |
+| macOS | `amd64`, `arm64` |
+| Windows | `amd64` archive is published, but the shell installer does not support Windows |
+
+Release archives are named:
+
+```text
+ribat_v0.1.0_linux_amd64.tar.gz
+ribat_v0.1.0_linux_arm64.tar.gz
+ribat_v0.1.0_darwin_amd64.tar.gz
+ribat_v0.1.0_darwin_arm64.tar.gz
+ribat_v0.1.0_windows_amd64.tar.gz
+```
+
+Each release also publishes `checksums.txt`.
+
+## Install With Curl
+
+On Linux or macOS, install the latest release:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | sh
+```
+
+The installer:
+
+* detects your OS and CPU architecture;
+* resolves the latest GitHub release unless `RIBAT_VERSION` is set;
+* downloads the matching release archive;
+* verifies the archive against `checksums.txt`;
+* installs `ribat` into `$HOME/.local/bin` by default.
+
+Confirm the install:
+
+```bash
+ribat version
+```
+
+### Installer Options
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `RIBAT_VERSION` | `latest` | Release tag to install. Accepts `v0.1.0` or `0.1.0`. |
+| `RIBAT_INSTALL_DIR` | `$XDG_BIN_HOME`, then `$HOME/.local/bin` | Destination directory for user installs. |
+| `RIBAT_INSTALL_SYSTEM` | `0` | Set to `1` or `true` to install into `/usr/local/bin`, using `sudo` when needed. |
+
+Examples:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_VERSION=v0.1.0 sh
+```
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_DIR="$HOME/bin" sh
+```
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | RIBAT_INSTALL_SYSTEM=1 sh
+```
+
+Use the system-wide install when the binary will be launched by the systemd service at `/usr/local/bin/ribat`.
+
+## Manual Archive Install
+
+Download the release archive and checksum file from GitHub Releases.
+
+Example for Linux x86_64:
+
+```bash
+TAG=v0.1.0
+ARCHIVE="ribat_${TAG}_linux_amd64.tar.gz"
+curl -fL -o "$ARCHIVE" "https://github.com/MohamedElashri/ribat/releases/download/${TAG}/${ARCHIVE}"
+curl -fsSL -o checksums.txt "https://github.com/MohamedElashri/ribat/releases/download/${TAG}/checksums.txt"
+grep "  ${ARCHIVE}$" checksums.txt | sha256sum -c -
+tar -xzf "$ARCHIVE"
+sudo install -m 0755 ribat /usr/local/bin/ribat
+ribat version
+```
+
+Use `darwin_arm64`, `darwin_amd64`, `linux_arm64`, or `windows_amd64` for other release archives.
+
+## Build From Source
+
+Use this path when developing Ribat or installing systemd packaging from a checkout.
+
+Requirements:
+
+* Go, using the version declared in `go.mod`;
+* `make`;
+* systemd and Docker for host integration.
+
+Build and test:
+
+```bash
+go test ./...
+make build
+./bin/ribat version
+```
+
+Install from source:
+
+```bash
+sudo make install
+```
+
+This installs:
+
+```text
+/usr/local/bin/ribat
+/etc/ribat/config.yaml
+/var/lib/ribat/
+/var/log/ribat/
+/etc/systemd/system/ribat.service
+```
+
+## Host Paths
 
 Ribat uses these host paths by convention:
 
@@ -22,12 +162,13 @@ Ribat uses these host paths by convention:
 
 The SQLite state file lives under `/var/lib/ribat`, so restarting Docker or Ribat does not clear quarantine observations, approvals, bypasses, or freezes.
 
-## Install
+## Enable AuthZ Mode
 
-Build and install the binary, example config, state directory, log directory, and systemd service:
+AuthZ mode is the host enforcement path and should be configured as root.
+
+Start the Ribat service:
 
 ```bash
-sudo make install
 sudo systemctl daemon-reload
 sudo systemctl enable --now ribat.service
 ```
@@ -40,7 +181,7 @@ sudo curl --unix-socket /run/docker/plugins/ribat.sock -X POST http://localhost/
 
 The response should include `authz`.
 
-## Docker Daemon Configuration
+## Configure Docker
 
 Merge this setting into `/etc/docker/daemon.json`:
 
@@ -62,13 +203,7 @@ sudo systemctl restart docker
 
 After Docker restarts, first-seen mutable-tag pulls should be denied and recorded according to `/etc/ribat/config.yaml`.
 
-## Verify
-
-Check the installed binary version:
-
-```bash
-ribat version
-```
+## Verify Enforcement
 
 Run a local decision:
 
@@ -77,6 +212,12 @@ sudo ribat decide --config /etc/ribat/config.yaml docker.io/library/alpine:lates
 ```
 
 The first decision for a new mutable-tag digest should usually be `DENY` with a reason that says the digest entered quarantine.
+
+On a Docker host, run the live validation harness:
+
+```bash
+make test-docker-live
+```
 
 ## Disable
 
@@ -113,7 +254,7 @@ sudo rm -f /etc/systemd/system/docker.service.d/10-ribat.conf
 
 Edit `/etc/docker/daemon.json` and remove `ribat` from `authorization-plugins`.
 
-Then reload systemd and start Docker:
+Then reload systemd daemon and start Docker:
 
 ```bash
 sudo systemctl daemon-reload

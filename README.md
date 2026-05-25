@@ -6,6 +6,14 @@ When a tag resolves to a digest Ribat has not seen before, that digest enters qu
 
 ## Quick Start
 
+Install the latest release on Linux or macOS:
+
+```bash
+curl -fsSL https://melashri.net/ribat/install.sh | sh
+```
+
+Or run from a source checkout:
+
 ```bash
 go run ./cmd/ribat version
 go run ./cmd/ribat inspect docker.io/library/alpine:latest
