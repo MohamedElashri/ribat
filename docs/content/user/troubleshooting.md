@@ -1,4 +1,9 @@
-# Ribat Troubleshooting
++++
+title = "Troubleshooting"
+description = "Recover Docker startup, inspect unexpected denials, and debug common deployment issues."
+weight = 80
+template = "page"
++++
 
 ## Docker Does Not Start
 

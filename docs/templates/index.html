@@ -1,0 +1,52 @@
+{{- define "index" -}}{{ template "base" . }}{{- end }}
+{{- define "content" -}}
+<div class="docs-layout docs-layout-home">
+  <aside class="side-nav" aria-label="Documentation navigation">
+    {{ template "docs-nav" . }}
+  </aside>
+  <article class="article-shell home-article">
+    <p class="section-label">Documentation</p>
+    <h1>{{ .Config.Title }}</h1>
+    <p class="lede">{{ .Config.Description }}</p>
+    <div class="prose">{{ safeHTML .Section.BodyHTML }}</div>
+
+    <div class="quick-actions">
+      <a class="button primary" href="{{ .BasePath }}/user/getting-started/">Get started</a>
+      <a class="button secondary" href="{{ .BasePath }}/reference/cli/">CLI reference</a>
+    </div>
+
+    <section class="doc-card-grid" aria-label="Documentation sections">
+      <a class="doc-card" href="{{ .BasePath }}/user/getting-started/">
+        <span>User</span>
+        <strong>Start using Ribat</strong>
+        <small>Learn the delayed-trust model and run the first decision.</small>
+      </a>
+      <a class="doc-card" href="{{ .BasePath }}/user/installation/">
+        <span>Install</span>
+        <strong>Deploy on Docker hosts</strong>
+        <small>Systemd service, Docker AuthZ config, rollback, and verification.</small>
+      </a>
+      <a class="doc-card" href="{{ .BasePath }}/reference/config/">
+        <span>Reference</span>
+        <strong>Look up exact policy fields</strong>
+        <small>Mutable-tag quarantine, registry failures, Cosign, state, and audit.</small>
+      </a>
+      <a class="doc-card" href="{{ .BasePath }}/developer/architecture/">
+        <span>Developer</span>
+        <strong>Understand the internals</strong>
+        <small>AuthZ, resolver, quarantine engine, SQLite state, audit, and proxy.</small>
+      </a>
+      <a class="doc-card" href="{{ .BasePath }}/user/live-validation/">
+        <span>Validation</span>
+        <strong>Run live Docker checks</strong>
+        <small>Opt-in proxy and installed AuthZ validation on a real Docker host.</small>
+      </a>
+      <a class="doc-card" href="{{ .BasePath }}/developer/docs-site/">
+        <span>Docs</span>
+        <strong>Maintain this site</strong>
+        <small>The documentation is built with Nida and published by GitHub Actions.</small>
+      </a>
+    </section>
+  </article>
+</div>
+{{- end }}

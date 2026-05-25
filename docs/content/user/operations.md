@@ -1,6 +1,13 @@
-# Ribat Operations
++++
+title = "Operations"
+description = "Approve, bypass, freeze, audit, export, and import Ribat state."
+weight = 50
+template = "page"
++++
 
-This guide covers the commands used after Ribat is installed.
+These commands are used after Ribat is installed.
+
+For exact command syntax, every option, and exit behavior, see the [CLI reference](@/reference/cli.md).
 
 ## Inspect And Decide
 
@@ -20,6 +27,21 @@ ribat decide --config /etc/ribat/config.yaml docker.io/library/alpine:latest
 
 Approvals are digest-specific. Use them when a quarantined digest has been reviewed and should be allowed before the age window expires.
 
+Syntax:
+
+```text
+ribat approve [--config PATH] IMAGE:TAG@DIGEST --ttl DURATION --reason TEXT [--by ACTOR]
+```
+
+Options:
+
+| Option | Argument | Required | Description |
+| --- | --- | --- | --- |
+| `--config` | `PATH` | no | Policy file containing state and audit paths. |
+| `--ttl` | `DURATION` | no | Approval lifetime. Omit for no expiry. |
+| `--reason` | `TEXT` | yes | Reason stored in state and audit events. |
+| `--by` | `ACTOR` | no | Actor recorded for the operation. Defaults to `$USER` or `cli`. |
+
 ```bash
 ribat approve --config /etc/ribat/config.yaml \
   docker.io/library/alpine:latest@sha256:abc123 \
@@ -33,6 +55,21 @@ An approval does not allow a different digest for the same tag. If the tag moves
 
 Bypasses are tag-level and TTL-bound. They are intended for short incidents where age quarantine needs to be skipped temporarily.
 
+Syntax:
+
+```text
+ribat bypass [--config PATH] IMAGE:TAG --ttl DURATION --reason TEXT [--by ACTOR]
+```
+
+Options:
+
+| Option | Argument | Required | Description |
+| --- | --- | --- | --- |
+| `--config` | `PATH` | no | Policy file containing state and audit paths. |
+| `--ttl` | `DURATION` | yes | Bypass lifetime. |
+| `--reason` | `TEXT` | yes | Reason stored in state and audit events. |
+| `--by` | `ACTOR` | no | Actor recorded for the operation. Defaults to `$USER` or `cli`. |
+
 ```bash
 ribat bypass --config /etc/ribat/config.yaml \
   docker.io/library/alpine:latest \
@@ -44,7 +81,22 @@ Bypasses do not override freezes and do not bypass required Cosign verification.
 
 ## Freeze
 
-Freezes deny a tag, or a tag plus digest, until removed from state or expired by a future operation. The current CLI creates active freezes without TTL.
+Freezes deny a tag, or a tag plus digest, until removed from state or expired by TTL. Omit `--ttl` for an indefinite freeze.
+
+Syntax:
+
+```text
+ribat freeze [--config PATH] IMAGE:TAG[@DIGEST] [--ttl DURATION] --reason TEXT [--by ACTOR]
+```
+
+Options:
+
+| Option | Argument | Required | Description |
+| --- | --- | --- | --- |
+| `--config` | `PATH` | no | Policy file containing state and audit paths. |
+| `--ttl` | `DURATION` | no | Freeze lifetime. Omit for no expiry. |
+| `--reason` | `TEXT` | yes | Reason stored in state and audit events. |
+| `--by` | `ACTOR` | no | Actor recorded for the operation. Defaults to `$USER` or `cli`. |
 
 ```bash
 ribat freeze --config /etc/ribat/config.yaml \
@@ -91,15 +143,3 @@ ribat import-state --config /etc/ribat/config.yaml --input ribat-state.json
 ```
 
 Import merges rows into the target database. It does not wipe unrelated existing state.
-
-## AuthZ Coverage
-
-AuthZ mode gates:
-
-* `docker pull`
-* `docker compose pull`
-* `docker compose up --pull always`
-* container create requests that reference images
-* Swarm service create and update requests
-
-`docker build --pull` is denied conservatively. The operational workaround is to pre-pull approved base images or use digest-pinned bases and build without `--pull`.

@@ -1,0 +1,187 @@
+{{- define "base" -}}
+{{- $repoURL := index .Config.Extra "repo_url" -}}
+<!doctype html>
+<html lang="{{ default .Config.Language "en" }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ if ne .Title .Config.Title }}{{ .Title }} | {{ end }}{{ .Config.Title }}</title>
+  <meta name="description" content="{{ default .Description .Config.Description }}">
+  <meta name="author" content="{{ .Config.Author }}">
+  <link rel="canonical" href="{{ .CanonicalURL }}">
+  <meta property="og:title" content="{{ if ne .Title .Config.Title }}{{ .Title }} | {{ end }}{{ .Config.Title }}">
+  <meta property="og:description" content="{{ default .Description .Config.Description }}">
+  <meta property="og:url" content="{{ .CanonicalURL }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ .Config.Title }}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ if ne .Title .Config.Title }}{{ .Title }} | {{ end }}{{ .Config.Title }}">
+  <meta name="twitter:description" content="{{ default .Description .Config.Description }}">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" href="{{ asset "favicon.svg" }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ asset "style.css" }}">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="site-shell">
+    <header class="site-header">
+      <a class="brand" href="{{ .BasePath }}/" aria-label="Ribat documentation home">
+        <span class="brand-mark">r</span>
+        <span class="brand-text">Ribat Docs</span>
+      </a>
+      {{ if .Config.Search.Enabled }}
+      <form class="header-search" role="search" data-header-search data-base-path="{{ .BasePath }}">
+        <label class="header-search-label" for="header-search-query">Search docs</label>
+        <input id="header-search-query" class="header-search-input" type="search" name="q" autocomplete="off" placeholder="Search docs" aria-controls="header-search-results" data-header-search-input>
+        <div class="header-search-panel" id="header-search-results" data-header-search-panel hidden>
+          <p class="header-search-status" data-header-search-status></p>
+          <ol class="header-search-results" data-header-search-results></ol>
+        </div>
+      </form>
+      {{ end }}
+      <nav class="top-nav" aria-label="Primary navigation">
+        <a{{ if eq .CurrentURL "/" }} class="active"{{ end }} href="{{ .BasePath }}/">Home</a>
+        <a{{ if hasPrefix .CurrentURL "/user/" }} class="active"{{ end }} href="{{ .BasePath }}/user/">User</a>
+        <a{{ if hasPrefix .CurrentURL "/reference/" }} class="active"{{ end }} href="{{ .BasePath }}/reference/">Reference</a>
+        <a{{ if hasPrefix .CurrentURL "/developer/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/">Developer</a>
+        <a href="{{ $repoURL }}">GitHub</a>
+      </nav>
+    </header>
+    <main id="content" class="content-frame">
+      {{- template "content" . }}
+    </main>
+    <footer class="site-footer">
+      <p>Built with Nida. Ribat keeps mutable Docker tags on a slower, safer clock.</p>
+      <p>&copy; Mohamed Elashri</p>
+    </footer>
+  </div>
+  {{ if .Config.Search.Enabled }}
+  <script src="{{ .BasePath }}/{{ .Config.Search.Filename }}"></script>
+  <script>
+  (function () {
+    var form = document.querySelector("[data-header-search]");
+    var input = document.querySelector("[data-header-search-input]");
+    var panel = document.querySelector("[data-header-search-panel]");
+    var results = document.querySelector("[data-header-search-results]");
+    var status = document.querySelector("[data-header-search-status]");
+    if (!form || !input || !panel || !results || !status) {
+      return;
+    }
+
+    var basePath = form.getAttribute("data-base-path") || "";
+    var store = window.searchIndex && window.searchIndex.documentStore;
+    var docs = store && store.docs ? store.docs : {};
+    var entries = Object.keys(docs).map(function (url) {
+      var doc = docs[url] || {};
+      return {
+        url: url,
+        title: doc.title || url,
+        description: doc.description || "",
+        body: doc.body || ""
+      };
+    });
+    var activeMatches = [];
+
+    function termsFor(query) {
+      return query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    }
+
+    function score(entry, terms) {
+      var title = entry.title.toLowerCase();
+      var description = entry.description.toLowerCase();
+      var body = entry.body.toLowerCase();
+      var total = 0;
+      terms.forEach(function (term) {
+        if (title.indexOf(term) !== -1) total += 8;
+        if (description.indexOf(term) !== -1) total += 4;
+        if (body.indexOf(term) !== -1) total += 1;
+      });
+      return total;
+    }
+
+    function snippet(entry, terms) {
+      if (entry.description) {
+        return entry.description;
+      }
+      var body = entry.body;
+      var lower = body.toLowerCase();
+      var index = -1;
+      terms.some(function (term) {
+        index = lower.indexOf(term);
+        return index !== -1;
+      });
+      if (index === -1) {
+        return body.slice(0, 150);
+      }
+      var start = Math.max(0, index - 60);
+      var text = body.slice(start, start + 150);
+      return (start > 0 ? "... " : "") + text + (start + 150 < body.length ? " ..." : "");
+    }
+
+    function closePanel() {
+      panel.hidden = true;
+      results.replaceChildren();
+      status.textContent = "";
+      activeMatches = [];
+    }
+
+    function render(query) {
+      var terms = termsFor(query);
+      results.replaceChildren();
+      if (terms.length === 0) {
+        closePanel();
+        return;
+      }
+
+      activeMatches = entries.map(function (entry) {
+        return { entry: entry, score: score(entry, terms) };
+      }).filter(function (match) {
+        return match.score > 0;
+      }).sort(function (a, b) {
+        return b.score - a.score || a.entry.title.localeCompare(b.entry.title);
+      }).slice(0, 6);
+
+      panel.hidden = false;
+      status.textContent = activeMatches.length === 1 ? "1 result" : activeMatches.length + " results";
+
+      activeMatches.forEach(function (match) {
+        var item = document.createElement("li");
+        var link = document.createElement("a");
+        var summary = document.createElement("p");
+        link.href = basePath + match.entry.url;
+        link.textContent = match.entry.title;
+        summary.textContent = snippet(match.entry, terms);
+        item.append(link, summary);
+        results.append(item);
+      });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (activeMatches.length > 0) {
+        window.location.href = basePath + activeMatches[0].entry.url;
+      }
+    });
+    input.addEventListener("input", function () {
+      render(input.value);
+    });
+    input.addEventListener("focus", function () {
+      render(input.value);
+    });
+    document.addEventListener("click", function (event) {
+      if (!form.contains(event.target)) {
+        closePanel();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        closePanel();
+        input.blur();
+      }
+    });
+  })();
+  </script>
+  {{ end }}
+</body>
+</html>
+{{- end }}

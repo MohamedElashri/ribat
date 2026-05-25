@@ -1,0 +1,14 @@
+{{- define "page" -}}{{ template "base" . }}{{- end }}
+{{- define "content" -}}
+<div class="docs-layout">
+  <aside class="side-nav" aria-label="Documentation navigation">
+    {{ template "docs-nav" . }}
+  </aside>
+  <article class="article-shell">
+    <p class="section-label">{{ default .Section.Title "Docs" }}</p>
+    <h1>{{ .Page.Title }}</h1>
+    {{ if .Page.Description }}<p class="lede">{{ .Page.Description }}</p>{{ end }}
+    <div class="prose">{{ safeHTML .Page.BodyHTML }}</div>
+  </article>
+</div>
+{{- end }}

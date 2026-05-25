@@ -1,4 +1,9 @@
-# Ribat Policy
++++
+title = "Policy"
+description = "Configure mutable-tag quarantine, digest-pinned behavior, registry failures, and Cosign verification."
+weight = 40
+template = "page"
++++
 
 Ribat policy is stored in YAML. The example policy at `configs/ribat.example.yaml` is conservative: mutable tags enter quarantine, digest-pinned images are allowed, registry failures deny, and signature failures deny.
 
@@ -10,7 +15,7 @@ The first time Ribat sees a mutable tag resolve to a digest, it records the tupl
 registry + repository + tag + digest
 ```
 
-Then it denies the pull unless `allow_first_seen_pull` is explicitly enabled for the matching policy. This is the core safety behavior.
+Then it denies the pull unless `allow_first_seen_pull` is explicitly enabled for the matching policy.
 
 Example:
 
@@ -23,8 +28,6 @@ If `sha256:first` is new and the matching policy requires `14d`, the pull is den
 ## Matching
 
 Rules are evaluated in order. The first matching rule overrides fields from `default_policy`; if no rule matches, the default policy applies.
-
-Common match patterns:
 
 ```yaml
 rules:
@@ -55,8 +58,8 @@ default_policy:
 
 Supported actions:
 
-* `quarantine`: record new digests and allow only after the minimum age.
-* `deny`: always deny mutable tags covered by this policy.
+* `quarantine`: record new digests and allow only after the minimum age;
+* `deny`: always deny mutable tags covered by this policy;
 * `allow`: allow mutable tags covered by this policy.
 
 Use `allow` and `allow_first_seen_pull: true` carefully; both reduce protection against fast mutable-tag compromise.
@@ -111,16 +114,3 @@ rules:
 ```
 
 When Cosign is required, the host running Ribat must have `cosign` available on `PATH`.
-
-## Local State
-
-```yaml
-state:
-  backend: sqlite
-  path: "/var/lib/ribat/state.db"
-
-audit:
-  path: "/var/log/ribat/audit.jsonl"
-```
-
-The SQLite database stores observations, decisions, approvals, freezes, bypasses, and Cosign verification cache entries. The audit log stores JSONL events for operator review.

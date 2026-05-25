@@ -1,0 +1,9 @@
+{{- define "404" -}}{{ template "base" . }}{{- end }}
+{{- define "content" -}}
+<section class="not-found">
+  <p class="eyebrow">404</p>
+  <h1>That page wandered off.</h1>
+  <p class="hero-copy">The docs are still small, so this path may not exist yet.</p>
+  <a class="button primary" href="{{ .BasePath }}/">Return home</a>
+</section>
+{{- end }}

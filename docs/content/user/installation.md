@@ -1,6 +1,11 @@
-# Installing Ribat on a Docker Host
++++
+title = "Installation"
+description = "Install Ribat as a systemd service and Docker authorization plugin."
+weight = 20
+template = "page"
++++
 
-This guide installs Ribat as a systemd service that exposes a Docker authorization plugin socket at `/run/docker/plugins/ribat.sock`.
+Ribat installs as a systemd service that exposes a Docker authorization plugin socket at `/run/docker/plugins/ribat.sock`.
 
 Download a versioned release tarball for your platform, or build from source with `make build`. Release tarballs are named like `ribat_v0.1.0_linux_amd64.tar.gz` and are published with `checksums.txt`.
 
@@ -15,7 +20,7 @@ Ribat uses these host paths by convention:
 /run/docker/plugins/ribat.sock
 ```
 
-The SQLite state file lives under `/var/lib/ribat`, so restarting Docker or Ribat does not clear quarantine observations, approvals, or freezes.
+The SQLite state file lives under `/var/lib/ribat`, so restarting Docker or Ribat does not clear quarantine observations, approvals, bypasses, or freezes.
 
 ## Install
 
@@ -27,7 +32,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ribat.service
 ```
 
-Check that the plugin endpoint is reachable:
+Check that Docker can discover the authorization plugin endpoint:
 
 ```bash
 sudo curl --unix-socket /run/docker/plugins/ribat.sock -X POST http://localhost/Plugin.Activate
@@ -65,7 +70,7 @@ Check the installed binary version:
 ribat version
 ```
 
-Run a dry decision:
+Run a local decision:
 
 ```bash
 sudo ribat decide --config /etc/ribat/config.yaml docker.io/library/alpine:latest
@@ -120,7 +125,3 @@ The rollback leaves `/var/lib/ribat/state.db` and `/var/log/ribat/audit.jsonl` i
 ```bash
 sudo make uninstall
 ```
-
-## Troubleshooting
-
-See `docs/troubleshooting.md` for plugin socket checks, unexpected denial triage, Cosign verification failures, proxy pull format, and the conservative `docker build --pull` behavior.

@@ -1,0 +1,57 @@
+config_version = "0.4"
+base_url = "https://melashri.net/ribat/"
+title = "Ribat Docs"
+description = "A Docker image update gate that delays trust for newly observed mutable-tag digests."
+language = "en"
+author = "Mohamed Elashri"
+
+content_dir = "content"
+template_dir = "templates"
+static_dir = "static"
+output_dir = "public"
+
+paginate = 50
+drafts = false
+syntax_theme = "github"
+minify_html = false
+
+[rss]
+enabled = false
+
+[atom]
+enabled = false
+
+[sitemap]
+enabled = true
+filename = "sitemap.xml"
+
+[robots]
+enabled = true
+filename = "robots.txt"
+
+[server]
+host = "127.0.0.1"
+port = 2914
+livereload = true
+
+[sections]
+default_sort_by = "weight"
+paginate_by = 0
+paginate_path = "page"
+
+[permalinks]
+user = "/user/{slug}/"
+reference = "/reference/{slug}/"
+developer = "/developer/{slug}/"
+
+[search]
+enabled = true
+filename = "search_index.en.js"
+
+[pipeline]
+fingerprint = false
+minify_css = false
+minify_js = false
+
+[extra]
+repo_url = "https://github.com/MohamedElashri/ribat"

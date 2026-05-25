@@ -51,7 +51,7 @@ func TestDockerDaemonExampleEnablesRibatAuthz(t *testing.T) {
 }
 
 func TestInstallDocsCoverOperationsAndRollback(t *testing.T) {
-	body := readFile(t, "docs/install.md")
+	body := readFile(t, "docs/content/user/installation.md")
 	for _, want := range []string{
 		"/etc/ribat/config.yaml",
 		"/var/lib/ribat/state.db",
@@ -63,10 +63,9 @@ func TestInstallDocsCoverOperationsAndRollback(t *testing.T) {
 		"ribat_v0.1.0_linux_amd64.tar.gz",
 		"## Disable",
 		"## Rollback",
-		"docs/troubleshooting.md",
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("docs/install.md missing %q", want)
+			t.Fatalf("docs/content/user/installation.md missing %q", want)
 		}
 	}
 }
@@ -80,7 +79,13 @@ func TestMakefileInstallsPackagingArtifacts(t *testing.T) {
 		"install: build",
 		"release-snapshot:",
 		"test-integration:",
+		"test-docker-live:",
+		"docs-build:",
+		"docs-serve:",
+		"github.com/MohamedElashri/nida/cmd/nida@main",
 		"RIBAT_INTEGRATION_TESTS=1",
+		"RIBAT_DOCKER_LIVE_TESTS=1",
+		"scripts/live-docker-validation.sh",
 		"ribat_$(VERSION)_",
 		"SOURCE_DATE_EPOCH",
 		"checksums.txt",
@@ -100,25 +105,23 @@ func TestDocumentationSetCoversPhase12Topics(t *testing.T) {
 	docs := map[string][]string{
 		"README.md": {
 			"## Quick Start",
-			"## Example Denial",
-			"configs/ribat.strict.yaml",
-			"configs/ribat.cosign.example.yaml",
-			"docker build --pull",
-			"RIBAT_INTEGRATION_TESTS",
+			"https://melashri.net/ribat/",
+			"make docs-build",
+			"make docs-serve",
 		},
-		"docs/threat-model.md": {
+		"docs/content/user/security-model.md": {
 			"Security Invariant",
 			"Default-Deny Behavior",
 			"Watchtower",
 			"Portainer",
 		},
-		"docs/policy.md": {
+		"docs/content/user/policy.md": {
 			"First-Seen Denial",
 			"registry + repository + tag + digest",
 			"Cosign Verification",
 			"failed_registry_resolution",
 		},
-		"docs/operations.md": {
+		"docs/content/user/operations.md": {
 			"ribat approve",
 			"ribat freeze",
 			"ribat bypass",
@@ -126,11 +129,41 @@ func TestDocumentationSetCoversPhase12Topics(t *testing.T) {
 			"ribat export-state",
 			"ribat import-state",
 		},
-		"docs/troubleshooting.md": {
+		"docs/content/user/troubleshooting.md": {
 			"Docker Does Not Start",
 			"Cosign Verification Fails",
 			"Build Pulls Are Denied",
 			"Registry Proxy Pull Fails",
+		},
+		"docs/content/user/live-validation.md": {
+			"make test-docker-live",
+			"RIBAT_VALIDATE_INSTALLED_AUTHZ",
+			"does not edit Docker daemon configuration",
+			"first-seen mutable tag pull is denied",
+		},
+		"docs/content/developer/architecture.md": {
+			"internal/quarantine",
+			"AuthZ mode",
+			"proxy mode",
+		},
+		"docs/content/developer/docs-site.md": {
+			"built with Nida",
+			".github/workflows/pages.yml",
+			"docs/public",
+		},
+		"docs/content/reference/cli.md": {
+			"## Command Summary",
+			"Exit codes:",
+			"| Option | Argument | Required | Default | Description |",
+			"`--by`",
+			"Side effects:",
+		},
+		"docs/content/reference/config.md": {
+			"## Top-Level Fields",
+			"| Field | Type | Required | Description |",
+			"`default_policy.mutable_tags`",
+			"`default_policy.signatures.cosign`",
+			"Duration Values",
 		},
 	}
 	for path, wants := range docs {
@@ -139,6 +172,83 @@ func TestDocumentationSetCoversPhase12Topics(t *testing.T) {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s missing %q", path, want)
 			}
+		}
+	}
+}
+
+func TestNidaDocsSiteShape(t *testing.T) {
+	config := readFile(t, "docs/config.toml")
+	for _, want := range []string{
+		`base_url = "https://melashri.net/ribat/"`,
+		`content_dir = "content"`,
+		`template_dir = "templates"`,
+		`static_dir = "static"`,
+		`output_dir = "public"`,
+		`user = "/user/{slug}/"`,
+		`developer = "/developer/{slug}/"`,
+		`repo_url = "https://github.com/MohamedElashri/ribat"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("docs/config.toml missing %q", want)
+		}
+	}
+
+	for _, path := range []string{
+		"docs/templates/base.html",
+		"docs/templates/index.html",
+		"docs/templates/page.html",
+		"docs/templates/section.html",
+		"docs/templates/partials/nav.html",
+		"docs/static/style.css",
+		"docs/static/favicon.svg",
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected Nida docs site file %s: %v", path, err)
+		}
+	}
+}
+
+func TestPagesWorkflowBuildsNidaDocs(t *testing.T) {
+	body := readFile(t, ".github/workflows/pages.yml")
+	for _, want := range []string{
+		"repository: MohamedElashri/nida",
+		"path: .docs-tools/nida",
+		"go-version-file: .docs-tools/nida/go.mod",
+		"go run ./cmd/nida build --site",
+		"path: docs/public",
+		"actions/configure-pages",
+		"actions/upload-pages-artifact",
+		"actions/deploy-pages",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("pages workflow missing %q", want)
+		}
+	}
+}
+
+func TestLiveDockerValidationScriptIsOptIn(t *testing.T) {
+	body := readFile(t, "scripts/live-docker-validation.sh")
+	for _, want := range []string{
+		"RIBAT_DOCKER_LIVE_TESTS",
+		"RIBAT_VALIDATE_INSTALLED_AUTHZ",
+		"docker pull",
+		"proxy --config",
+		"approve --config",
+		"Plugin.Activate",
+		`"decision":"deny"`,
+		`"decision":"allow"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("live Docker validation script missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"daemon.json",
+		"systemctl restart docker",
+		"systemctl stop docker",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("live Docker validation script should not manage Docker daemon configuration; found %q", forbidden)
 		}
 	}
 }

@@ -16,8 +16,9 @@ STATE_DIR := $(LOCALSTATEDIR)/ribat
 AUDIT_DIR := $(LOGDIR)/ribat
 LDFLAGS := -s -w -buildid= -X github.com/MohamedElashri/ribat/internal/version.Version=$(VERSION) -X github.com/MohamedElashri/ribat/internal/version.Commit=$(COMMIT) -X github.com/MohamedElashri/ribat/internal/version.Date=$(DATE)
 RELEASE_TARGETS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+DOCS_GO_ENV ?= GOCACHE=$(CURDIR)/.gocache
 
-.PHONY: build test test-integration release-snapshot install install-docker-dropin uninstall clean
+.PHONY: build test test-integration test-docker-live docs-build docs-serve release-snapshot install install-docker-dropin uninstall clean
 
 build:
 	$(GO) build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/ribat
@@ -27,6 +28,23 @@ test:
 
 test-integration:
 	RIBAT_INTEGRATION_TESTS=1 $(GO) test ./tests/integration
+
+test-docker-live: build
+	RIBAT_DOCKER_LIVE_TESTS=1 RIBAT_BIN=./$(BINARY) scripts/live-docker-validation.sh
+
+docs-build:
+	@if [ -d ../nida ]; then \
+		cd ../nida && $(DOCS_GO_ENV) $(GO) run ./cmd/nida build --site $(CURDIR)/docs; \
+	else \
+		$(DOCS_GO_ENV) $(GO) run github.com/MohamedElashri/nida/cmd/nida@main build --site ./docs; \
+	fi
+
+docs-serve:
+	@if [ -d ../nida ]; then \
+		cd ../nida && $(DOCS_GO_ENV) $(GO) run ./cmd/nida serve --site $(CURDIR)/docs; \
+	else \
+		$(DOCS_GO_ENV) $(GO) run github.com/MohamedElashri/nida/cmd/nida@main serve --site ./docs; \
+	fi
 
 release-snapshot:
 	rm -rf dist

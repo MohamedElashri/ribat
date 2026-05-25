@@ -1,0 +1,26 @@
+{{- define "docs-nav" -}}
+<details class="side-nav-details" open>
+<summary>Docs menu</summary>
+<nav>
+  <p>User</p>
+  <a{{ if eq .CurrentURL "/user/getting-started/" }} class="active"{{ end }} href="{{ .BasePath }}/user/getting-started/">Getting Started</a>
+  <a{{ if eq .CurrentURL "/user/installation/" }} class="active"{{ end }} href="{{ .BasePath }}/user/installation/">Installation</a>
+  <a{{ if eq .CurrentURL "/user/security-model/" }} class="active"{{ end }} href="{{ .BasePath }}/user/security-model/">Security Model</a>
+  <a{{ if eq .CurrentURL "/user/policy/" }} class="active"{{ end }} href="{{ .BasePath }}/user/policy/">Policy</a>
+  <a{{ if eq .CurrentURL "/user/operations/" }} class="active"{{ end }} href="{{ .BasePath }}/user/operations/">Operations</a>
+  <a{{ if eq .CurrentURL "/user/proxy-mode/" }} class="active"{{ end }} href="{{ .BasePath }}/user/proxy-mode/">Proxy Mode</a>
+  <a{{ if eq .CurrentURL "/user/live-validation/" }} class="active"{{ end }} href="{{ .BasePath }}/user/live-validation/">Live Validation</a>
+  <a{{ if eq .CurrentURL "/user/troubleshooting/" }} class="active"{{ end }} href="{{ .BasePath }}/user/troubleshooting/">Troubleshooting</a>
+  <p>Reference</p>
+  <a{{ if eq .CurrentURL "/reference/cli/" }} class="active"{{ end }} href="{{ .BasePath }}/reference/cli/">CLI</a>
+  <a{{ if eq .CurrentURL "/reference/config/" }} class="active"{{ end }} href="{{ .BasePath }}/reference/config/">Config</a>
+  <p>Developer</p>
+  <a{{ if eq .CurrentURL "/developer/architecture/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/architecture/">Architecture</a>
+  <a{{ if eq .CurrentURL "/developer/enforcement-flow/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/enforcement-flow/">Enforcement Flow</a>
+  <a{{ if eq .CurrentURL "/developer/storage/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/storage/">Storage</a>
+  <a{{ if eq .CurrentURL "/developer/testing/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/testing/">Testing</a>
+  <a{{ if eq .CurrentURL "/developer/release-workflow/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/release-workflow/">Release Workflow</a>
+  <a{{ if eq .CurrentURL "/developer/docs-site/" }} class="active"{{ end }} href="{{ .BasePath }}/developer/docs-site/">Docs Site</a>
+</nav>
+</details>
+{{- end }}
