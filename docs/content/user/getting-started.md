@@ -76,4 +76,4 @@ sudo systemctl enable --now ribat.service
 
 Then merge `packaging/docker/daemon-ribat.json` into `/etc/docker/daemon.json` and restart Docker.
 
-Read the full [installation guide](@/user/installation.md) before enabling it on a production host.
+Read the [AuthZ installation steps](@/user/installation.md#enable-authz-mode) before enabling it on a production host.

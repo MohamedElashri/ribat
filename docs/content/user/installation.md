@@ -166,7 +166,39 @@ The SQLite state file lives under `/var/lib/ribat`, so restarting Docker or Riba
 
 AuthZ mode is the host enforcement path and should be configured as root.
 
-Start the Ribat service:
+### 1. Install The Service Files
+
+If you are installing from a source checkout, run:
+
+```bash
+sudo make install
+```
+
+This installs the binary, default config, state/log directories, and `ribat.service`.
+
+If you installed only the prebuilt binary with `install.sh`, you still need the service unit and config files from this repository before enabling AuthZ mode. Until release archives include packaging files, use a checkout for host service installation:
+
+```bash
+git clone https://github.com/MohamedElashri/ribat.git
+cd ribat
+sudo make install
+```
+
+`make install` keeps an existing `/etc/ribat/config.yaml` in place.
+
+### 2. Review Policy
+
+Open `/etc/ribat/config.yaml` before enabling Docker enforcement:
+
+```bash
+sudo editor /etc/ribat/config.yaml
+```
+
+The default policy is conservative: first-seen mutable-tag digests are denied and recorded.
+
+### 3. Start Ribat
+
+Start the Ribat authorization plugin service:
 
 ```bash
 sudo systemctl daemon-reload
@@ -181,7 +213,7 @@ sudo curl --unix-socket /run/docker/plugins/ribat.sock -X POST http://localhost/
 
 The response should include `authz`.
 
-## Configure Docker
+### 4. Configure Docker
 
 Merge this setting into `/etc/docker/daemon.json`:
 
@@ -203,7 +235,23 @@ sudo systemctl restart docker
 
 After Docker restarts, first-seen mutable-tag pulls should be denied and recorded according to `/etc/ribat/config.yaml`.
 
-## Verify Enforcement
+### 5. Verify Docker Sees The Plugin
+
+Check Docker daemon information:
+
+```bash
+docker info --format '{{json .SecurityOptions}}'
+```
+
+The output should include an authorization plugin entry for Ribat.
+
+You can also confirm that the socket still responds:
+
+```bash
+sudo curl --unix-socket /run/docker/plugins/ribat.sock -X POST http://localhost/Plugin.Activate
+```
+
+### 6. Verify Enforcement
 
 Run a local decision:
 
@@ -217,6 +265,19 @@ On a Docker host, run the live validation harness:
 
 ```bash
 make test-docker-live
+```
+
+Or test a normal Docker pull:
+
+```bash
+docker pull docker.io/library/alpine:latest
+```
+
+For a first-seen mutable-tag digest, Docker should show a Ribat denial message. Use `ribat status` and `ribat audit` to inspect what happened:
+
+```bash
+sudo ribat status --config /etc/ribat/config.yaml docker.io/library/alpine:latest
+sudo ribat audit --config /etc/ribat/config.yaml --image docker.io/library/alpine:latest --since 24h
 ```
 
 ## Disable

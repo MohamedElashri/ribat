@@ -32,6 +32,12 @@ sudo systemctl status ribat.service
 sudo journalctl -u ribat.service
 ```
 
+Confirm the service unit is installed:
+
+```bash
+systemctl cat ribat.service
+```
+
 Confirm the activation endpoint:
 
 ```bash

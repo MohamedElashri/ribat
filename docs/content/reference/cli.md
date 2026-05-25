@@ -195,6 +195,8 @@ Docker daemon configuration:
 
 AuthZ mode gates Docker pull, container create, service create, and service update requests. `docker build --pull` is denied conservatively.
 
+For full installation steps, including the systemd service, plugin socket verification, Docker daemon configuration, and rollback, see [Installation](@/user/installation.md#enable-authz-mode).
+
 ## `proxy`
 
 Start local registry proxy mode.
